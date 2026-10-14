@@ -139,14 +139,15 @@ describe('B8 无意义输入', () => {
 });
 
 describe('B10 LLM 总预算', () => {
-  it('分类耗时后，生成只能用剩余预算', async () => {
+  it('生成与意图分类共用总预算', async () => {
     const seen: number[] = [];
     const llm = async (m: any, o?: any) => {
       if (m[0].content.includes('意图分类器')) { await new Promise((r) => setTimeout(r, 120)); return '{"category":"education","scope":"whole","reason":"x"}'; }
       seen.push(o?.timeoutMs ?? -1); return echoLlm([])(m);
     };
     await runPipeline(req('科创板开通权限需要什么条件'), makeAdapters({ llm }), { llmBudgetMs: 2000 });
-    expect(seen[0]).toBeLessThanOrEqual(2000 - 100);
+    // 投机执行：生成与意图分类并行，生成的超时按共用的总预算计
+    expect(seen[0]).toBeLessThanOrEqual(2000);
   });
   it('预算已用尽 → degraded，不再调用生成', async () => {
     let gen = 0;
@@ -275,5 +276,56 @@ describe('R3-10 引用分以最终正文为准', () => {
     expect(r.answer).toMatch(/\[\d\]/);
     expect(r.confidenceBreakdown.citation).toBeGreaterThan(0);
     expect(r.checks.find((c) => c.name === 'citation')!.detail).toContain('最终正文引用');
+  });
+});
+describe('主体检查：括号内补充说明不算主体', () => {
+  it('创业板门槛原文括号里提到融资融券，不判主体不一致', () => {
+    const c = chunkDocument('---\ndoc_key: cy\ntitle: 创业板权限\n---\n## 条件\n个人投资者申请开通创业板交易权限需满足：①申请权限开通前 20 个交易日，证券账户及资金账户内的资产日均不低于人民币 10 万元（不包括通过融资融券融入的资金和证券）；②参与证券交易 24 个月以上。\n');
+    const [e] = sentenceEvidence('创业板开户门槛为申请权限开通前 20 个交易日，证券账户及资金账户内的资产日均不低于 10 万元[1]。', c);
+    expect(e.subjectMismatch).toBeNull();
+    expect(e.supported).toBe(true);
+  });
+});
+
+describe('投机并行：生成不等意图分类', () => {
+  const slow = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const mk = (intentOut: string, intentMs: number, genMs: number, log: string[]) => async (m: any, o?: any) => {
+    if (m[0].content.includes('意图分类器')) { await slow(intentMs); log.push('intent-done'); return intentOut; }
+    log.push('gen-start');
+    await new Promise((res, rej) => { const t = setTimeout(res, genMs); o?.signal?.addEventListener('abort', () => { clearTimeout(t); log.push('gen-aborted'); rej(new Error('aborted')); }); });
+    log.push('gen-done');
+    return '{"answer":"个人投资者开通科创板权限需满足申请前 20 个交易日日均资产不低于 50 万元[1]。","used":[1],"covered":true}';
+  };
+  it('education：生成在意图返回前就已发起，总时延≈max(意图, 生成)', async () => {
+    const log: string[] = [];
+    const t = Date.now();
+    const r = await runPipeline(req('科创板开通权限需要什么条件', 'C4'), makeAdapters({ llm: mk('{"category":"education","scope":"whole","reason":"x"}', 120, 120, log) }));
+    expect(Date.now() - t).toBeLessThan(220);
+    expect(log.indexOf('gen-start')).toBeLessThan(log.indexOf('intent-done'));
+    expect(r.decision).toMatch(/answered/);
+    expect(r.checks.find((c) => c.name === 'timing')!.detail).toContain('投机执行');
+  });
+  it('whole 越界：取消投机生成并拒答', async () => {
+    const log: string[] = [];
+    const r = await runPipeline(req('茅台和五粮液选哪个'), makeAdapters({ llm: mk('{"category":"stock_pick","scope":"whole","reason":"比较个股"}', 40, 500, log) }));
+    expect(r.decision).toBe('refused');
+    if (log.includes('gen-start')) expect(log).toContain('gen-aborted');
+    expect(log).not.toContain('gen-done');
+  });
+  it('partial：丢弃整题答案，按可回答部分重新生成', async () => {
+    const log: string[] = [];
+    const r = await runPipeline(req('科创板开通条件是什么，再问个茅台和五粮液选哪个'), makeAdapters({ llm: mk('{"category":"stock_pick","scope":"partial","reason":"比较个股","answerable":"科创板开通条件是什么"}', 40, 80, log) }));
+    expect(r.decision).toBe('partial_refusal');
+    const starts = log.filter((x) => x === 'gen-start').length;
+    expect(starts).toBeGreaterThanOrEqual(1);
+    if (starts === 2) expect(log).toContain('gen-aborted');   // 投机生成被取消后重生成
+  });
+});
+describe('否定检测：名词性的"未""无"不算否定翻转', () => {
+  it('"未转股"不触发否定不一致', () => {
+    const c = chunkDocument('---\ndoc_key: cb\ntitle: 可转债\n---\n## 强赎\n强制赎回是指正股价格在一定期间内持续高于转股价一定比例时，发行人有权按约定价格赎回未转股的可转债。\n');
+    const [e] = sentenceEvidence('可转债的强赎是指当正股价格持续高于转股价一定比例时，发行人有权按约定价格（通常略高于面值）赎回未转股的可转债[1]。', c);
+    expect(e.qualifierChange).toBeNull();
+    expect(e.supported).toBe(true);
   });
 });

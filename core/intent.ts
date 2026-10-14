@@ -45,7 +45,7 @@ export async function classifyIntent(llm: LlmFn, question: string, timeoutMs = I
   let t: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_r, rej) => { t = setTimeout(() => rej(new Error(`意图分类超时（${timeoutMs}ms）`)), timeoutMs); });
   const t0 = Date.now();
-  const once = (alt = false) => llm([{ role: 'system', content: INTENT_SYSTEM }, { role: 'user', content: alt ? `待分类的用户问题如下，请只输出 JSON。\n「${question}」` : `问：${question}` }], { maxTokens: 120, json: true, timeoutMs: Math.max(500, timeoutMs - (Date.now() - t0)) });
+  const once = (alt = false) => llm([{ role: 'system', content: INTENT_SYSTEM }, { role: 'user', content: alt ? `待分类的用户问题如下，请只输出 JSON。\n「${question}」` : `问：${question}` }], { maxTokens: 80, json: true, timeoutMs: Math.max(500, timeoutMs - (Date.now() - t0)), purpose: 'intent' });
   try {
     // 主模型快速失败时由适配层回退备用模型（剩余预算足够才回退）
     // 个别输入会让上游快速报错（实测 "Worker not found"），换一种包裹方式重试一次

@@ -33,6 +33,7 @@ const call = async (h: any, method: string, path: string, body?: unknown, header
 const ask = (question: string, userRisk = 'C3', headers: Record<string, string> = {}) => call(chat.onRequestPost, 'POST', '/api/chat', { question, userRisk, sessionId: 's1' }, headers);
 
 beforeAll(async () => {
+  seed.__setPrecomputed({ model: '', dims: 0, format: 'f16-base64', exportedAt: '', source: 'none', chunks: {} });   // 用 mock AI 的向量，不混入真实预计算向量
   invalidateKbCache(); clearChatCache(); resetRateLimits();
   const r = await call(seed.onRequestPost, 'POST', '/api/admin/seed', {});
   expect(r.status).toBe(200);

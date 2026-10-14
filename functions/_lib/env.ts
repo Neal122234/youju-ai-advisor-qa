@@ -6,6 +6,13 @@ export interface Env {
   ADMIN_TOKEN?: string;
   /** 仅本地：'1' 且未绑定 AI 时启用确定性替身（functions/_lib/mockAi.ts） */
   MOCK_AI?: string;
+  /** SiliconFlow 备用通道（Pages secret）；未配置则该通道不可用 */
+  SILICONFLOW_API_KEY?: string;
+  SF_CHAT_MODEL?: string;
+  SF_INTENT_MODEL?: string;
+  SF_EMBED_MODEL?: string;
+  /** 主备顺序，逗号分隔，默认 siliconflow,workers-ai */
+  PROVIDER_ORDER?: string;
 }
 export type Fault = 'llm' | 'embed' | 'db' | 'slow-llm';
 export function parseFaults(req: Request): Set<Fault> {

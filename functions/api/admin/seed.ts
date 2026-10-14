@@ -6,7 +6,7 @@
 import type { Env } from '../../_lib/env';
 import { HttpError, isLocalRequest, json, nowIso } from '../../_lib/http';
 import { BUNDLE, all, first, invalidateKbCache } from '../../_lib/db';
-import { EMBED_BATCH, embedTexts, packEmbedding } from '../../_lib/ai';
+import { EMBED_BATCH, canEmbed, embedTextsDetailed, packEmbedding, parseProvider } from '../../_lib/ai';
 import { SCHEMA_SQL } from '../../_generated/schema';
 import precomputed from '../../_generated/embeddings.json';
 import { chunkFingerprint, decodeF16Base64, type EmbeddingBundle } from '../../../core/f16';
@@ -66,12 +66,13 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     else needAi.push(c);
   }
   for (let i = 0; i < preStmts.length; i += 50) await db.batch(preStmts.slice(i, i + 50));
-  const work = !env.AI ? [] : batchParam !== null ? needAi.slice(0, EMBED_BATCH) : needAi;
-  let embedded = 0; let embedError: string | null = null;
+  const work = !canEmbed(env) ? [] : batchParam !== null ? needAi.slice(0, EMBED_BATCH) : needAi;
+  let embedded = 0; let embedError: string | null = null; let embedProvider: string | null = null;
   for (let i = 0; i < work.length; i += EMBED_BATCH) {
     const part = work.slice(i, i + EMBED_BATCH);
     try {
-      const vecs = await embedTexts(env, part.map((c) => `${c.title}｜${c.heading}\n${c.text}`));
+      const er = await embedTextsDetailed(env, part.map((c) => `${c.title}｜${c.heading}\n${c.text}`), new Set(), parseProvider(request));
+      const vecs = er.vectors; embedProvider = er.provider;
       await db.batch(part.map((c, k) => db.prepare('UPDATE chunks SET embedding = ? WHERE id = ?').bind(packEmbedding(vecs[k]), c.id)));
       embedded += part.length;
     } catch (e) { embedError = e instanceof Error ? e.message : String(e); break; }
@@ -79,10 +80,10 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   invalidateKbCache();
   const left = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM chunks WHERE embedding IS NULL AND active = 1');
   const total = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM chunks WHERE active = 1');
-  const done = (left?.n ?? 0) === 0 || !env.AI;
+  const done = (left?.n ?? 0) === 0 || !canEmbed(env);
   return json({
-    ok: !embedError, release: 'v1', docs: BUNDLE.docs.length, chunks: total?.n ?? 0, embeddedNow: embedded + fromBundle, fromPrecomputed: fromBundle, fromAi: embedded, pending: left?.n ?? 0, done,
+    ok: !embedError, release: 'v1', docs: BUNDLE.docs.length, chunks: total?.n ?? 0, embeddedNow: embedded + fromBundle, fromPrecomputed: fromBundle, fromAi: embedded, embedProvider, pending: left?.n ?? 0, done,
     nextBatch: done ? null : batchParam !== null ? Number(batchParam) + 1 : 0, embedError,
-    note: env.AI ? undefined : '未绑定 AI：已导入文档与块，未向量化（检索走关键词模式）；绑定 AI 后再次调用即可补齐向量',
+    note: canEmbed(env) ? undefined : '未绑定 AI：已导入文档与块，未向量化（检索走关键词模式）；绑定 AI 后再次调用即可补齐向量',
   }, embedError ? 502 : 200);
 };

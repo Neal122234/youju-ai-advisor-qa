@@ -48,7 +48,7 @@ describe('正常作答（mock LLM）', () => {
     expect(r.disclaimer).toContain('风险提示');
     expect(r.answer).not.toContain('<think>');
     expect(calls[0][0]).toContain('只能依据【资料】');
-    expect(names(r)).toEqual(['input_validation', 'input_compliance', 'intent_llm', 'retrieval', 'coverage', 'generation', 'output_compliance', 'citation', 'evidence', 'subject_check', 'grounding', 'confidence', 'suitability']);
+    expect(names(r)).toEqual(['input_validation', 'input_compliance', 'intent_llm', 'retrieval', 'coverage', 'generation', 'timing', 'output_compliance', 'citation', 'evidence', 'subject_check', 'grounding', 'confidence', 'suitability']);
   });
   it('适当性不匹配：C2 问 R4 业务 → notice 并附在答案末尾', async () => {
     const r = await runPipeline(req('科创板开通权限需要什么条件', 'C2'), makeAdapters({ llm: echoLlm([]) }));

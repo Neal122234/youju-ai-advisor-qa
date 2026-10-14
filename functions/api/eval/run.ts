@@ -3,7 +3,7 @@
 import type { Env } from '../../_lib/env';
 import { HttpError, json, readJson } from '../../_lib/http';
 import { answer } from '../../_lib/chat';
-import { embedTexts } from '../../_lib/ai';
+import { canEmbed, embedTexts, parseProvider, providerState } from '../../_lib/ai';
 import { loadKb } from '../../_lib/db';
 import { judge, summarize, type EvalQuestion, type EvalResult } from '../../../core/eval';
 import { analyzeInput, maskPII } from '../../../core/compliance';
@@ -23,14 +23,16 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const limit = (b.limit as number | undefined) ?? Math.min(200, list.length || 1);
   list = list.slice(offset, offset + limit);
   const kb = await loadKb(env.DB);
+  const tok0 = providerState().sfTokens;
   // 预计算查询向量（与管线内检索文本口径一致）
   const embedCache = new Map<string, number[]>();
-  if (kb.source === 'd1' && kb.embedded > 0 && env.AI) {
+  const provider = parseProvider(request);
+  if (kb.source === 'd1' && kb.embedded > 0 && canEmbed(env)) {
     const texts = [...new Set(list.map((q) => {
       const s = sanitizeInput(q.question).text; const a = analyzeInput(s);
       return maskPII(a.verdict === 'mixed' || a.injection ? a.compliantText : s, true);
     }))];
-    try { const vs = await embedTexts(env, texts); texts.forEach((t, i) => embedCache.set(t, vs[i])); } catch { /* 单题内再试 */ }
+    try { const vs = await embedTexts(env, texts, new Set(), provider); texts.forEach((t, i) => embedCache.set(t, vs[i])); } catch { /* 单题内再试 */ }
   }
   const results: EvalResult[] = new Array(list.length);
   let next = 0;
@@ -38,12 +40,12 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     while (next < list.length) {
       const i = next++; const q = list[i];
       try {
-        const r = await answer(env, { question: q.question, userRisk: q.userRisk, sessionId: 'eval' }, new Set(), { kb, embedCache, noLlm: b.llm === false, sessionTag: 'eval', persist: b.persist !== false });
+        const r = await answer(env, { question: q.question, userRisk: q.userRisk, sessionId: 'eval' }, new Set(), { kb, embedCache, noLlm: b.llm === false, sessionTag: 'eval', persist: b.persist !== false, provider });
         results[i] = judge(q, r);
       } catch (e) { results[i] = judge(q, null, e instanceof Error ? e.message : String(e)); }
     }
   };
   await Promise.all([worker(), worker(), worker()]);
   const s = summarize(results, kb.release);
-  return json({ ...s, offset, limit, totalQuestions: ALL.length, mode: b.llm === false ? 'no-llm' : 'llm', nextOffset: offset + list.length < (b.ids?.length ? ALL.filter((q) => b.ids!.includes(q.id)).length : ALL.length) ? offset + list.length : null });
+  return json({ ...s, sfTokens: providerState().sfTokens - tok0, offset, limit, totalQuestions: ALL.length, mode: b.llm === false ? 'no-llm' : 'llm', nextOffset: offset + list.length < (b.ids?.length ? ALL.filter((q) => b.ids!.includes(q.id)).length : ALL.length) ? offset + list.length : null });
 };

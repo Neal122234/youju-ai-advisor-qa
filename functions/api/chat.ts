@@ -1,6 +1,7 @@
 // POST /api/chat  ChatRequest → ChatResponse；支持 x-fault: llm | embed | db | slow-llm（逗号分隔可组合）
 import type { Env } from '../_lib/env';
 import { parseFaults } from '../_lib/env';
+import { parseProvider } from '../_lib/ai';
 import { HttpError, json, readJson } from '../_lib/http';
 import { answer } from '../_lib/chat';
 import type { ChatRequest, RiskLevel } from '../../core/types';
@@ -16,6 +17,6 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     sessionId: typeof body.sessionId === 'string' ? body.sessionId.slice(0, 64) : '',
     history: Array.isArray(body.history) ? body.history.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').slice(-6) : undefined,
   };
-  const resp = await answer(env, req, parseFaults(request), { useCache: request.headers.get('x-no-cache') !== '1' });
+  const resp = await answer(env, req, parseFaults(request), { useCache: request.headers.get('x-no-cache') !== '1', provider: parseProvider(request) });
   return json(resp);
 };

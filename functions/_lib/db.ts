@@ -5,7 +5,7 @@ import { findMergeTarget, normalizeQuestion } from '../../core/gaps';
 import { maskPII } from '../../core/compliance';
 import bundle from '../../web/src/generated/kb-bundle.json';
 import type { Env, Fault } from './env';
-import { embedTexts, packEmbedding } from './ai';
+import { canEmbed, embedTexts, packEmbedding } from './ai';
 import { HttpError, nowIso, uid } from './http';
 
 export interface BundleDoc { docKey: string; title: string; category: string; productRisk: ProductRisk | null; tags: string[]; version: number; content: string }
@@ -154,7 +154,7 @@ export async function publishVersions(env: Env, db: D1Database, versionIds: stri
   const allChunks = prepared.flatMap((p) => p.chunks);
   // 未绑定 AI（如本地无远程 AI）时允许"仅关键词"发布：块不带向量，检索按 BM25 参与；绑定了 AI 但调用失败则整体不发布
   let vecs: (number[] | null)[];
-  if (!env.AI) vecs = allChunks.map(() => null);
+  if (!canEmbed(env)) vecs = allChunks.map(() => null);
   else {
     try { vecs = await embedTexts(env, allChunks.map((c) => `${c.docTitle}｜${c.heading}\n${c.text}`), faults); }
     catch (e) { throw new HttpError(502, 'EMBED_FAILED', `向量化失败，未发布（知识库保持原版本）：${e instanceof Error ? e.message : e}`); }
@@ -183,7 +183,7 @@ export async function publishVersions(env: Env, db: D1Database, versionIds: stri
   await db.batch(stmts);
   invalidateKbCache();
   const rel = await first<any>(db, 'SELECT * FROM releases WHERE id = ?', relId);
-  return { release: rel, chunks: allChunks.length, embedded: !!env.AI, published: versions.map((v) => ({ id: v.id, docKey: v.doc_key, version: v.version })) };
+  return { release: rel, chunks: allChunks.length, embedded: canEmbed(env), published: versions.map((v) => ({ id: v.id, docKey: v.doc_key, version: v.version })) };
 }
 
 export async function nextVersion(db: D1Database, docKey: string): Promise<number> {

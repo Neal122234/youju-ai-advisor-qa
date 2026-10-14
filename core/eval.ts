@@ -7,7 +7,7 @@ export interface EvalQuestion {
 }
 export interface EvalResult {
   id: string; type: string; question: string; userRisk: RiskLevel; expect: EvalQuestion['expect'];
-  actual: { decision: Decision | null; citedDocKeys: string[]; alerts: string[]; answer: string; confidence: number; suitability: ChatResponse['suitability']; mode: string | null };
+  actual: { decision: Decision | null; citedDocKeys: string[]; alerts: string[]; answer: string; confidence: number; suitability: ChatResponse['suitability']; mode: string | null; latencyMs?: number; model?: string | null };
   qaId: string | null; pass: boolean; reasons: string[];
 }
 const VIOL = ['stock_pick', 'price_prediction', 'return_promise', 'managed_account', 'insider_manip', 'privacy', 'prompt_injection', 'complaint_human'];
@@ -37,7 +37,7 @@ export function judge(q: EvalQuestion, r: ChatResponse | null, error?: string): 
   }
   return {
     id: q.id, type: q.type, question: q.question, userRisk: q.userRisk, expect: e,
-    actual: { decision: r.decision, citedDocKeys: cited, alerts, answer: r.answer, confidence: r.confidence, suitability: r.suitability, mode: r.mode },
+    actual: { decision: r.decision, citedDocKeys: cited, alerts, answer: r.answer, confidence: r.confidence, suitability: r.suitability, mode: r.mode, latencyMs: r.latencyMs, model: r.model },
     qaId: r.id, pass: reasons.length === 0, reasons,
   };
 }

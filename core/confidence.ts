@@ -123,10 +123,13 @@ export const SENT_AUTOCITE = 0.6;   // 无引用句自动补引用的重合率�
 
 /** 泛化词不参与"关键术语"核验（几乎每段资料都会出现或可自然转述） */
 const GENERIC_TERMS = new Set(['风险', '收益', '投资者', '本金', '亏损', '账户', '资产', '开通', '权限', '门槛', '交易日', '委托', '成交', '申报', '投教',
-  '投资者教育', '理财', '证券账户', '资金账户', '交易所', '基金', '股票', '市值', '新股', '分红', '波动', '流动性', '杠杆', '手续费', '佣金', '密码']);
+  '投资者教育', '理财', '证券账户', '资金账户', '交易所', '基金', '股票', '市值', '新股', '分红', '波动', '流动性', '杠杆', '手续费', '佣金', '密码', 'app']);
 // 量词只在修饰对象时计（"部分 ETF""所有投资者"），"超过部分可按 1 股递增"里的"部分"不算
 const QUANT_RE = /(部分|个别|某些|一些|多数|大部分|大多数|少数|全部|所有|一律|仅|只有)(?=\s*[\u4e00-\u9fa5a-z]{0,4}?(etf|lof|基金|品种|股票|证券|产品|券商|投资者|债券|公司|板块|情况|交易|个股|账户|客户|业务))/gi;
-const NEG_RE = /(不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|不设|不收|不受|不计|不参与|不支持|无需|无法|禁止|没有|未|勿|免征|免收)/;
+const NEG_RE_RAW = /(不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|不设|不收|不受|不计|不参与|不支持|无需|无法|禁止|没有|未|勿|免征|免收)/;
+/** "未转股/未成年/未满/未到期/未来…"里的"未""无"是名词性修饰，不是谓语否定，比较前先遮蔽 */
+const NEG_NOUN_MASK = /(未转股|未成年|未满|未到期|未了结|未缴款|未缴|未上市|未成交|未披露|未公开|未分配|未结清|未来|未交收|无风险|无论|不足|不限|不定期)/g;
+const NEG_RE = { test: (t: string) => NEG_RE_RAW.test(t.replace(NEG_NOUN_MASK, '□')) };
 
 function keyTerms(sentence: string): string[] {
   const t = normalizeText(sentence.replace(/\[\d+\]/g, ''));
@@ -142,7 +145,7 @@ function keyTerms(sentence: string): string[] {
 export const SYNONYMS: Record<string, string[]> = {
   两融: ['融资融券'], 融资融券: ['两融'], 爆仓: ['强制平仓', '平仓'], 货币基金: ['货币市场基金', '货币型'], 债券基金: ['债券型基金', '纯债', '债基'],
   股票型基金: ['股票基金'], 混合型基金: ['混合基金'], 开户: ['开立', '开通'], 销户: ['注销'], 转户: ['转托管'], etf: ['交易型开放式指数基金'],
-  lof: ['上市型开放式基金'], 交易经验: ['参与证券交易', '证券交易', '交易满'], 资产要求: ['日均', '资产'], 赎回: ['申赎'], 申购: ['申赎'], 基金净值: ['净值'], 涨跌幅限制: ['涨跌幅'], 跌停: ['涨跌幅'], 涨停: ['涨跌幅'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
+  lof: ['上市型开放式基金'], 交易经验: ['参与证券交易', '证券交易', '交易满'], 日均资产: ['资产日均', '日均'], 资产要求: ['日均', '资产'], 赎回: ['申赎'], 申购: ['申赎'], 基金净值: ['净值'], 涨跌幅限制: ['涨跌幅'], 跌停: ['涨跌幅'], 涨停: ['涨跌幅'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
 };
 /** 产品/业务主体词（从具体到宽泛）。问题主体与被引资料主体不一致时（问基金分红税、资料讲股票红利税）判为不覆盖 */
 const SUBJECTS: string[][] = [
@@ -151,13 +154,17 @@ const SUBJECTS: string[][] = [
   ['可交换债'], ['可转债', '可转换公司债券'], ['国债期货'], ['国债逆回购', '逆回购'], ['国债'], ['股票期权', '期权'], ['期货'], ['融资融券', '两融', '融资', '融券'],
   ['港股通'], ['北交所', '北京证券交易所'], ['科创板'], ['创业板'], ['新三板'], ['b股'], ['美股'], ['港股'], ['新股', '打新', '申购新股'], ['基金'],
 ];
+const SUBJECT_WORDS = new Set<string>();
 /** 文本中出现的主体（各组首词），按出现位置排序 */
 export function subjectsIn(text: string): string[] {
-  const t = normalizeText(text).replace(/\s+/g, '');
+  // 括号里的补充说明（"不包括通过融资融券融入的资金"）不算主体
+  const t = normalizeText(text).replace(/（[^）]*）|\([^)]*\)/g, '').replace(/\s+/g, '');
   const found = SUBJECTS.map((g) => ({ k: g[0], i: Math.min(...g.map((w) => { const p = t.indexOf(w); return p < 0 ? Infinity : p; })) }))
     .filter((x) => Number.isFinite(x.i) && x.k !== '基金').sort((a, b) => a.i - b.i);
   return found.map((x) => x.k);
 }
+
+for (const g of SUBJECTS) for (const w of g) SUBJECT_WORDS.add(w);
 
 /** 返回问题中最具体的主体组（只取最具体的一层，"黄金ETF联接基金"取联接基金/ETF，不取"基金"） */
 export function questionSubjects(question: string): string[][] {
@@ -201,8 +208,13 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
     const missingNumbers = numericFacts(s).filter((x) => !pool.includes(normNum(x)) && !raw.join('').includes(normNum(x)));
     const supOverlap = support.length ? Math.max(...support.map((n) => ov(n - 1))) : 0;
     // 术语可在"依据块 + 与本句高度重合（≥0.5）的其他检索块"中找到
-    const termPool = pool + numbered.map((_, i) => (ov(i) >= 0.5 ? raw[i] : '')).join('');
+    // 同一文档的其他检索块也算（"示例证券 App""R4"可能在同文档另一小节）
+    const supDocs = new Set(support.map((n) => numbered[n - 1].docKey));
+    const nearPool = pool + numbered.map((_, i) => (ov(i) >= 0.5 ? raw[i] : '')).join('');
+    const docPool = nearPool + numbered.map((c, i) => (supDocs.has(c.docKey) ? raw[i] : '')).join('');
     const missingTerms = keyTerms(plain).filter((w) => {
+      // 产品/业务主体词（ETF、LOF…）只在依据块与高重合块里找；其他术语可扩展到同一文档的其他检索块
+      const termPool = SUBJECT_WORDS.has(w) ? nearPool : docPool;
       if (termPool.includes(normNum(w)) || (SYNONYMS[w] ?? []).some((x) => termPool.includes(normNum(x)))) return false;
       if (pool.includes(normNum(w)) || (SYNONYMS[w] ?? []).some((x) => pool.includes(normNum(x)))) return false;
       if (qNorm.includes(normNum(w)) && supOverlap >= QUESTION_TERM_MIN_OVERLAP) return false;
@@ -245,14 +257,19 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
       const aSubj = subjectsIn(clause).length ? subjectsIn(clause) : sentSubj;
       if (!aSubj.length) continue;
       const cb = charBigramSet(clause);
-      let bestSrc: { x: string; parent: string } | null = null; let co = 0;
-      for (const n of support) for (const ss of srcClauses[n - 1]) {
+      // 候选：依据块 + 与本句高度重合的其他检索块（模型可能引错块，原文在别的块里）
+      const cand = [...new Set([...support, ...numbered.map((_, i) => (ov(i) >= 0.5 ? i + 1 : 0)).filter(Boolean)])];
+      const matches: { subj: string[]; o: number }[] = [];
+      for (const n of cand) for (const ss of srcClauses[n - 1]) {
         let k = 0; for (const b of cb) if (ss.b.has(b)) k++;
-        const o = cb.size ? k / cb.size : 0; if (o > co) { co = o; bestSrc = ss; }
+        const o = cb.size ? k / cb.size : 0;
+        if (o >= 0.4) matches.push({ subj: subjectsIn(ss.x).length ? subjectsIn(ss.x) : subjectsIn(ss.parent).slice(0, 1), o });
       }
-      if (!bestSrc || co < 0.4) continue;
-      const sSubj = subjectsIn(bestSrc.x).length ? subjectsIn(bestSrc.x) : subjectsIn(bestSrc.parent).slice(0, 1);
-      if (sSubj.length && !aSubj.some((x) => sSubj.includes(x))) { subjectMismatch = `主体不一致（答案：${aSubj.join('/')}，原文：${sSubj.join('/')}）`; break; }
+      if (!matches.length) continue;
+      // 只要有一个高度相近的原文分句主体一致（或原文分句没有主体），就不算不一致
+      if (matches.some((m) => !m.subj.length || aSubj.some((x) => m.subj.includes(x)))) continue;
+      const top = matches.sort((x, y) => y.o - x.o)[0];
+      subjectMismatch = `主体不一致（答案：${aSubj.join('/')}，原文：${top.subj.join('/')}）`; break;
     }
     // 含数字的短句（"开盘时间为 9:30"）：数字全部能在依据块里找到时，重合率门槛放宽到 0.25
     const nums = numericFacts(s);

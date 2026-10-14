@@ -269,6 +269,9 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
     // 追溯信息同样脱敏：check 明细里可能带有用户输入/模型输出片段
     checks: checks.map((c) => ({ ...c, detail: secretCtx ? maskPII(c.detail, true).replace(/(?<!\d)\d{6}(?!\d)/g, '******') : maskPII(c.detail) })),
   });
+  // 通道信息（实际使用的 provider/model 与额度切换说明）
+  const switchNote = () => { const n = adapters.providerNotes?.() ?? []; return n.length ? `（${[...new Set(n)].join('；')}）` : ''; };
+  const providerTag = (purpose?: 'intent' | 'generate') => { const m = adapters.modelName?.(purpose) ?? adapters.modelName?.(); return m ? `[${m}${switchNote()}] ` : ''; };
   const ticketId = () => `TK${String(adapters.newId()).replace(/[^A-Za-z0-9]/g, '').slice(0, 10).toUpperCase()}`;
 
   // 2a. 投诉/人工
@@ -323,15 +326,47 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   // clean：整句分类；mixed：只复核规则认为"可回答"的剩余部分（防止剩余部分本身也是越界变体）
   const useIntent = opts.intentLlm !== false && !!adapters.llm && (ana.verdict === 'clean' || ana.verdict === 'mixed');
   const t1 = now();
-  // LLM 总预算（意图分类 + 生成共用），默认 13s：分类慢时生成只能用剩余时间
+  // LLM 总预算（意图分类 + 生成共用），默认 13s
   const llmDeadline = t1 + (opts.llmBudgetMs ?? LLM_TOTAL_BUDGET_MS);
-  const [ret, intentRes] = await Promise.all([
-    doRetrieve(expandQuery(askText)),
-    useIntent ? classifyIntent(adapters.llm!, askText).then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, e })) : Promise.resolve(null),
-  ]);
+  const timing: string[] = [];
+
+  // 生成（含 JSON 解析失败重试 1 次）；可被投机取消
+  type GenOut = { parsed: ReturnType<typeof parseLlmJson>; err: unknown; ms: number; parseNotes: CheckResult[] };
+  const generate = async (text: string, refused: string, hs: Retrieved[], signal?: AbortSignal): Promise<GenOut> => {
+    const g0 = now(); const msgs = buildMessages(text, refused, hs, userRisk, req.history);
+    let parsed: ReturnType<typeof parseLlmJson> = null; let err: unknown = null; const parseNotes: CheckResult[] = [];
+    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+      try {
+        const m = attempt === 0 ? msgs : [...msgs, { role: 'user', content: '上一次输出不是合法 JSON。请只输出 {"answer":"...","used":[...],"covered":true|false}。' }];
+        const left = llmDeadline - now();
+        if (left < 1500) throw new Error(`LLM 总预算（${opts.llmBudgetMs ?? LLM_TOTAL_BUDGET_MS}ms）已用尽`);
+        const raw = await adapters.llm!(m, { maxTokens: 700, json: true, timeoutMs: Math.min(12_000, left), purpose: 'generate', signal });
+        parsed = parseLlmJson(raw);
+        if (!parsed) parseNotes.push({ name: 'llm_parse', pass: false, detail: `第 ${attempt + 1} 次输出无法解析为 JSON${attempt === 0 ? '，重试 1 次' : ''}` });
+      } catch (e) { err = e; break; }
+    }
+    return { parsed, err, ms: Math.round(now() - g0), parseNotes };
+  };
+  const canSpeculate = (hs: Retrieved[], mode: 'hybrid' | 'keyword') => !!adapters.llm && hs.length > 0
+    && (hs[0]?.score ?? 0) >= (mode === 'hybrid' ? (opts.tUnknownHybrid ?? T_UNKNOWN_HYBRID) : (opts.tUnknownKeyword ?? T_UNKNOWN_KEYWORD));
+
+  // 意图分类从一开始就发，与检索并行
+  let intentMs = 0;
+  const intentP = useIntent
+    ? classifyIntent(adapters.llm!, askText).then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, e })).finally(() => { intentMs = Math.round(now() - t1); })
+    : Promise.resolve(null);
+  const ret = await doRetrieve(expandQuery(askText));
+  const retrievalMs = Math.round(now() - t1);
+  timing.push(`检索 ${retrievalMs}ms`);
+  // 投机执行：检索完成后立即生成，不等意图分类结果；意图判越界时取消并丢弃
+  const specCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let specP: Promise<GenOut> | null = null;
+  if (useIntent && canSpeculate(ret.hits, ret.mode)) specP = generate(askText, refusedPart, ret.hits, specCtrl?.signal);
+  const intentRes = await intentP;
+  const discardSpec = (why: string) => { if (specP) { specCtrl?.abort(); specP.catch(() => undefined); timing.push(`投机生成已取消（${why}）`); specP = null; } };
   if (intentRes) {
-    const ms = Math.round(now() - t1);
-    if (!intentRes.ok) checks.push({ name: 'intent_llm', pass: true, detail: `LLM 意图分类失败（${errMsg(intentRes.e)}），仅采用规则结果` });
+    const ms = intentMs;
+    if (!intentRes.ok) checks.push({ name: 'intent_llm', pass: true, detail: `${providerTag('intent')}LLM 意图分类失败（${errMsg(intentRes.e)}），仅采用规则结果；${ms}ms` });
     else {
       const it: Intent = intentRes.v;
       // 反诈识别类问法（规则已识别）不因 LLM 判内幕/荐股群而拒答：保持教育作答
@@ -339,11 +374,13 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
         // 用户发的是本人信息（规则已识别并脱敏、会提醒），LLM 判"他人隐私"属误判
         || (it.category === 'privacy' && ana.selfPii && !/(他|她|别人|他人|朋友|同事|家人|老婆|老公|客户经理|某人)/.test(q));
       const viol = it.category !== 'education' && it.category !== 'chitchat' && !fraudOverride;
-      checks.push({ name: 'intent_llm', pass: !viol, detail: `第二层 LLM 意图分类：${it.category}${viol ? `（${it.scope === 'partial' ? '部分越界' : '整体越界'}）` : ''}；理由：${it.reason || '—'}${fraudOverride ? (it.category === 'privacy' ? '；用户提供的是本人信息，不按他人隐私拒答' : '；规则识别为反诈识别类问法，按教育作答') : ''}；${ms}ms` });
+      checks.push({ name: 'intent_llm', pass: !viol, detail: `${providerTag('intent')}第二层 LLM 意图分类：${it.category}${viol ? `（${it.scope === 'partial' ? '部分越界' : '整体越界'}）` : ''}；理由：${it.reason || '—'}${fraudOverride ? (it.category === 'privacy' ? '；用户提供的是本人信息，不按他人隐私拒答' : '；规则识别为反诈识别类问法，按教育作答') : ''}；${ms}ms` });
       if (it.category === 'chitchat' && !mixed && !ana.hits.length && q.length <= 20) {
+        discardSpec('意图为闲聊');
+        checks.push({ name: 'timing', pass: true, detail: `${timing.join('；')}；意图分类 ${ms}ms` });
         return finish({
           decision: 'answered', answer: INTRO_TEXT, citations: [], confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 },
-          handoff: null, retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: adapters.modelName?.() ?? null,
+          handoff: null, retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: adapters.modelName?.('intent') ?? null,
         });
       }
       if (viol) {
@@ -352,14 +389,18 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
         violCats.push(cat);
         const answerable = it.answerable && it.answerable.length >= 3 && q.includes(it.answerable.slice(0, 3)) ? it.answerable : '';
         if (it.scope === 'whole' || !answerable || mixed) {
+          discardSpec('意图判整体越界');
           const r = refusalFor([...new Set([...violCats])], book);
           checks.push({ name: 'route', pass: true, detail: mixed ? `规则判定的可回答部分经 LLM 复核仍属越界（${cat}）→ 整体拒答` : `LLM 判定整体越界（${cat}）→ 合规话术拒答` });
+          checks.push({ name: 'timing', pass: true, detail: `${timing.join('；')}；意图分类 ${ms}ms（与检索并行）` });
           return finish({
             decision: 'refused', answer: r.text, citations: r.scripts.map((c, i) => toCitation(i + 1, c)),
             confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 }, handoff: null,
-            retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: adapters.modelName?.() ?? null,
+            retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: adapters.modelName?.('intent') ?? null,
           });
         }
+        // 部分越界：投机生成的是整题答案，丢弃后用可回答部分重新检索、重新生成（允许多一次调用）
+        discardSpec('意图判部分越界，需按可回答部分重生成');
         mixed = true; refusal = refusalFor([cat], book);
         askText = maskPII(answerable, true); refusedPart = it.reason || cat;
       }
@@ -381,6 +422,7 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   const unknown = (reason: string, bd: Breakdown, modeOut: ChatResponse['mode'], model: string | null): ChatResponse => {
     const tid = ticketId();
     const e = book.get('handoff_unknown');
+    if (timing.length && !checks.some((c) => c.name === 'timing')) checks.push({ name: 'timing', pass: true, detail: timing.join('；') });
     return finish({
       decision: 'handoff_unknown', answer: prefixRefusal(fillTicket(e.text, tid)),
       citations: [...refusalCites(1), ...(e.chunk ? [toCitation((refusal?.scripts.length ?? 0) + 1, e.chunk)] : [])],
@@ -388,6 +430,7 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
     });
   };
   if (!hits.length || top1 < tUnknown) {
+    discardSpec('知识库未覆盖');
     checks.push({ name: 'coverage', pass: false, detail: `top1=${top1} < 阈值 ${tUnknown}（${rmode}）→ 知识库未覆盖，不调用 LLM` });
     return unknown('知识库未覆盖该问题', { ...ZERO, retrieval: rNorm }, mode, null);
   }
@@ -409,37 +452,31 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
       return unknown('降级摘录与问题相关度不足', { ...ZERO, retrieval: rNorm }, outMode, null);
     }
   } else {
-    const msgs = buildMessages(askText, refusedPart, hits, userRisk, req.history);
-    let parsed: ReturnType<typeof parseLlmJson> = null; let err: unknown = null;
-    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
-      try {
-        const m = attempt === 0 ? msgs : [...msgs, { role: 'user', content: '上一次输出不是合法 JSON。请只输出 {"answer":"...","used":[...],"covered":true|false}。' }];
-        const left = llmDeadline - now();
-        if (left < 1500) throw new Error(`LLM 总预算（${opts.llmBudgetMs ?? LLM_TOTAL_BUDGET_MS}ms）已用尽`);
-        const raw = await adapters.llm(m, { maxTokens: 700, json: true, timeoutMs: Math.min(12_000, left) });
-        parsed = parseLlmJson(raw);
-        if (!parsed) checks.push({ name: 'llm_parse', pass: false, detail: `第 ${attempt + 1} 次输出无法解析为 JSON${attempt === 0 ? '，重试 1 次' : ''}` });
-      } catch (e) { err = e; break; }
-    }
-    model = adapters.modelName?.() ?? null;
+    const reused = !!specP;
+    const g = specP ? await specP : await generate(askText, refusedPart, hits);
+    timing.push(reused ? `生成 ${g.ms}ms（投机执行：检索后立即发起，与意图分类并行${intentRes ? `，意图分类 ${intentMs}ms` : ''}，结果被采用）` : `生成 ${g.ms}ms（串行）`);
+    checks.push(...g.parseNotes);
+    const { parsed, err } = g;
+    model = adapters.modelName?.('generate') ?? adapters.modelName?.() ?? null;
     if (!parsed) {
       extractive = true; outMode = 'degraded';
       const ex = extractiveSelect(hits, askText);
       answer = ex.text;
-      checks.push({ name: 'generation', pass: false, detail: `${err ? `LLM 调用失败（${errMsg(err)}）` : 'LLM 输出两次解析失败'} → 降级为原文抽取（最佳相关度 ${ex.relevance}）` });
+      checks.push({ name: 'generation', pass: false, detail: `${err ? `LLM 调用失败（${errMsg(err)}）` : 'LLM 输出两次解析失败'}${switchNote()} → 降级为原文抽取（最佳相关度 ${ex.relevance}）；${g.ms}ms` });
       if (ex.relevance < EXTRACT_MIN_RELEVANCE) {
         checks.push({ name: 'extract_gate', pass: false, detail: `摘录与问题相关度 ${ex.relevance} < ${EXTRACT_MIN_RELEVANCE} → 不乱摘，转人工` });
         return unknown('降级摘录与问题相关度不足', { ...ZERO, retrieval: rNorm }, outMode, model);
       }
     } else {
       answer = stripThink(parsed.answer).trim(); covered = parsed.covered; used = parsed.used;
-      checks.push({ name: 'generation', pass: true, detail: `模型 ${model ?? 'llm'}；covered=${covered}；used=[${used.join(',')}]` });
+      checks.push({ name: 'generation', pass: true, detail: `模型 ${model ?? 'llm'}${switchNote()}；covered=${covered}；used=[${used.join(',')}]；${g.ms}ms` });
       if (!answer || /NO_ANSWER/i.test(answer)) {
         checks.push({ name: 'coverage_llm', pass: false, detail: 'LLM 判定资料不足（NO_ANSWER）→ 转人工并记缺口' });
         return unknown('资料不足以回答（LLM 判定）', { retrieval: rNorm, coverage: 0, grounding: 0, citation: 0 }, outMode, model);
       }
     }
   }
+  checks.push({ name: 'timing', pass: true, detail: `${timing.join('；')}；模型阶段总计 ${Math.round(now() - t1)}ms` });
 
   // 6. 输出合规
   const outHits = scanOutput(answer);
@@ -477,9 +514,11 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
       }
     }
     answer = answer.replace(/\n{3,}/g, '\n\n').trim();
+    // 前一句被剔除后，开头残留的连接词（"而…""但…"）去掉
+    if (dropped.length) answer = answer.replace(/^(而且|而|但是|但|并且|同时|此外|另外|因此|所以)[，,]?\s*/, '');
     const dd = dedupeAnswer(answer);
     if (dd.removed) { answer = dd.text; checks.push({ name: 'dedupe', pass: false, detail: `去除重复条目 ${dd.removed} 处` }); }
-    checks.push({ name: 'evidence', pass: dropped.length === 0, detail: `事实句 ${ev.length}，剔除无依据 ${dropped.length}${dropped.length ? `（${dropped.map((d) => `「${d.text.slice(0, 24)}」重合${d.overlap}${d.missingNumbers.length ? `、资料无数字 ${d.missingNumbers.join('/')}` : ''}${d.missingTerms.length ? `、依据块无术语 ${d.missingTerms.join('/')}` : ''}${d.qualifierChange ? `、${d.qualifierChange}` : ''}${d.subjectMismatch ? `、${d.subjectMismatch}` : ''}`).join('；')}）` : ''}${autoCited ? `；按重合度补/改引用 ${autoCited} 句` : ''}` });
+    checks.push({ name: 'evidence', pass: dropped.length === 0, detail: `事实句 ${ev.length}，剔除无依据 ${dropped.length}${dropped.length ? `（${dropped.map((d) => `「${d.text.slice(0, 80)}」重合${d.overlap}${d.missingNumbers.length ? `、资料无数字 ${d.missingNumbers.join('/')}` : ''}${d.missingTerms.length ? `、依据块无术语 ${d.missingTerms.join('/')}` : ''}${d.qualifierChange ? `、${d.qualifierChange}` : ''}${d.subjectMismatch ? `、${d.subjectMismatch}` : ''}`).join('；')}）` : ''}${autoCited ? `；按重合度补/改引用 ${autoCited} 句` : ''}` });
   }
   const finalCites = validateCitations(answer, numbered.length);
   // 引用 check 以最终正文为准（证据核验可能补/改了引用）

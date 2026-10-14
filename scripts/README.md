@@ -78,3 +78,14 @@ npm run build:kb                              # 把它复制成 functions/_gener
 seed 时对每个待向量化的块，先查预计算表：块 id 相同，且内容指纹（heading+text 的 FNV-1a）一致，就直接写库，不调用 AI；只有缺失或内容已改的块才调用 bge-m3。响应里的 `fromPrecomputed` / `fromAi` 分别是两种来源的块数。没有绑定 AI 时，也能用预计算向量完成 seed。
 
 存储格式取舍：每个分量用 float16 存，整条向量按 base64 编码（1024 维约 2.7 KB/块，181 块约 500 KB），体积约为 JSON 浮点的 1/3。bge-m3 的输出已做 L2 归一化，float16 的有效精度约为 3 位十进制，余弦相似度误差在 1e-3 量级（见 `tests/embeddings.test.ts`），对 top-k 排序没有实际影响。写入 D1 时仍解码为 JSON 浮点，不改变 `chunks.embedding` 的格式。
+
+## 模型通道（SiliconFlow 为主、Workers AI 为备）
+
+默认主备顺序为 `siliconflow,workers-ai`，可用环境变量 `PROVIDER_ORDER` 调整。生产以 SiliconFlow（`https://api.siliconflow.cn/v1`，OpenAI 兼容）为主：评审实际走的通道，要和我们完整评测时用的通道一致。chat、意图分类和 embedding 都按这个顺序依次尝试：
+
+- 额度或余额类错误（SiliconFlow 402 余额不足 / 429 配额，Workers AI 4006 每日免费额度耗尽）：该通道在本 isolate 内熔断 30 分钟，立即切到下一个通道；熔断期间直接跳过该通道，避免每次请求先失败一次浪费时延。
+- 其他错误：Workers AI 内部先回退 gpt-oss；仍失败且剩余预算 ≥3s 时，切到下一个通道。全部失败 → `degraded`（原文摘录）。
+- 配置：Pages secret `SILICONFLOW_API_KEY`（未配置时该通道视为不可用，自动只用 Workers AI）；可选环境变量 `SF_CHAT_MODEL`（默认 `Qwen/Qwen3-30B-A3B-Instruct-2507`，非 thinking 的 Instruct 版）、`SF_INTENT_MODEL`、`SF_EMBED_MODEL`（默认 `BAAI/bge-m3`，与 Workers AI 是同一个模型，两边的向量可以混用）。
+- 响应中的 `model` 字段为 `provider/model`；generation、intent_llm、retrieval 三步 check 会记录实际使用的通道，以及是否因额度或错误切换过。
+- `/api/health` 的 `providers` 字段：`order`（当前主备顺序）、`siliconflow` / `workersAi`（`ok`|`quota`|`configured`|`unknown`|`missing`）。只反映本 isolate 内最近一次调用的结果，不会为了探测去真实调用模型。
+- 测试头 `x-provider: siliconflow|workers-ai`：强制只用指定通道，对 `/api/chat`、`/api/eval/run`、`/api/admin/seed` 都生效；用于评测和主备对比，带该头的请求不走结果缓存。

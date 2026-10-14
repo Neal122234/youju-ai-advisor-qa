@@ -4,13 +4,13 @@ import { runPipeline, sanitizeInput } from '../../core/pipeline';
 import { createHybridRetriever, createKeywordRetriever } from '../../core/retrieve';
 import { normalizeQuestion } from '../../core/gaps';
 import type { Env, Fault } from './env';
-import { createLlm, embedTexts } from './ai';
+import { canEmbed, createLlm, embedTextsDetailed, type Provider } from './ai';
 import { dbFor, loadKb, persistChat, type KbState } from './db';
 import { uid } from './http';
 
 const edgeCache = () => (globalThis.caches as unknown as { default: Cache }).default;
 /** 管线逻辑版本：改动判定/提示词时递增，避免命中旧逻辑的缓存结果 */
-export const PIPELINE_VERSION = 'p24';
+export const PIPELINE_VERSION = 'p32';
 export const CACHE_TTL_MS = 10 * 60_000;
 const memCache = new Map<string, { at: number; resp: ChatResponse }>();
 export function clearChatCache() { memCache.clear(); }
@@ -44,25 +44,29 @@ export interface AnswerOptions {
   noLlm?: boolean;                         // 评测快速模式
   embedCache?: Map<string, number[]>;      // 预计算的查询向量
   kb?: KbState;
+  /** x-provider：强制指定通道（评测/对比用） */
+  provider?: Provider | null;
 }
 
 export async function answer(env: Env, req: ChatRequest, faults: Set<Fault>, o: AnswerOptions = {}): Promise<ChatResponse> {
   const db = dbFor(env, faults);
   const kb = o.kb ?? (await loadKb(db));
   const embedNote: string[] = [];
-  const handle = o.noLlm ? { llm: null, modelName: () => null, calls: () => 0 } : createLlm(env, faults);
+  const handle = o.noLlm ? { llm: null, modelName: () => null, calls: () => 0, notes: () => [] as string[] } : createLlm(env, faults, undefined, o.provider ?? null);
+  let embedProvider: string | null = null; let embedSwitch: string | null = null;
 
-  const canVector = kb.source === 'd1' && kb.embedded > 0 && !!env.AI;
+  const canVector = kb.source === 'd1' && kb.embedded > 0 && canEmbed(env);
   const retrieve = canVector
     ? createHybridRetriever(kb.chunks, async (q) => {
       const hit = o.embedCache?.get(q); if (hit) return hit;
-      const [v] = await embedTexts(env, [q], faults);
-      return v;
+      const r = await embedTextsDetailed(env, [q], faults, o.provider ?? null);
+      embedProvider = r.provider; embedSwitch = r.note;
+      return r.vectors[0];
     }, { onEmbedError: (e) => embedNote.push(e instanceof Error ? e.message : String(e)) })
     : createKeywordRetriever(kb.chunks);
 
   const sanitized = sanitizeInput(req.question).text;
-  const useCache = o.useCache !== false && faults.size === 0 && !(req.history?.length) && !o.noLlm;
+  const useCache = o.useCache !== false && faults.size === 0 && !(req.history?.length) && !o.noLlm && !o.provider;
   const cacheKey = useCache ? await sha(`${PIPELINE_VERSION}|${kb.release}|${req.userRisk}|${normalizeQuestion(sanitized)}`) : '';
   let resp: ChatResponse | null = null;
   if (useCache && sanitized) {
@@ -74,10 +78,14 @@ export async function answer(env: Env, req: ChatRequest, faults: Set<Fault>, o: 
   }
   if (!resp) {
     resp = await runPipeline(req, {
-      retrieve, llm: handle.llm, kbRelease: kb.release, newId: uid, modelName: handle.modelName,
+      retrieve, llm: handle.llm, kbRelease: kb.release, newId: uid, modelName: handle.modelName, providerNotes: handle.notes,
       scripts: () => kb.chunks.filter((c) => c.category === 'compliance_script'),
     });
     if (kb.note) resp.checks.splice(2, 0, { name: 'kb_source', pass: kb.source === 'd1', detail: kb.note });
+    if (embedProvider) {
+      const r = resp.checks.find((c) => c.name === 'retrieval');
+      if (r) r.detail += `；查询向量通道 ${embedProvider}${embedSwitch ? `（${embedSwitch}）` : ''}`;
+    }
     if (embedNote.length) {
       const r = resp.checks.find((c) => c.name === 'retrieval');
       if (r) { r.pass = false; r.detail += `（embedding 失败：${embedNote[0]}）`; }

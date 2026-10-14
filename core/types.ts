@@ -50,7 +50,7 @@ export interface DocMeta {
 }
 
 export type LlmMessage = { role: string; content: string };
-export type LlmFn = (messages: LlmMessage[], o?: { maxTokens?: number; json?: boolean; timeoutMs?: number; noFallback?: boolean }) => Promise<string>;
+export type LlmFn = (messages: LlmMessage[], o?: { maxTokens?: number; json?: boolean; timeoutMs?: number; noFallback?: boolean; purpose?: 'intent' | 'generate'; signal?: AbortSignal }) => Promise<string>;
 
 export interface Adapters {
   retrieve(q: string): Promise<{ hits: Retrieved[]; mode: 'hybrid' | 'keyword' }>;
@@ -58,7 +58,9 @@ export interface Adapters {
   kbRelease: string;
   newId(): string;
   /** 可选：llm 实际使用的模型名（由 Worker 适配层回填） */
-  modelName?: () => string | null;
+  modelName?: (purpose?: 'intent' | 'generate') => string | null;
+  /** 可选：通道切换说明（如额度耗尽切换备用通道），写入 checks */
+  providerNotes?: () => string[];
   /** 可选：合规话术块（compliance_script 文档），用于拒答模板与引用；缺省用内置副本 */
   scripts?: () => Promise<Chunk[]> | Chunk[];
 }
