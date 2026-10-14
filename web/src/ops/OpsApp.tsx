@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getHealth, type ApiMode } from '../api';
-import { Icon, splitRoute, useSlashFocus } from '../ui/kit';
+import { Icon, NAV_COUNTS_EVENT, splitRoute, useSlashFocus } from '../ui/kit';
 import { Overview } from './Overview';
 import { LogDetailPage, LogsPage } from './Logs';
 import { GapsPage } from './Gaps';
@@ -30,7 +30,12 @@ export function OpsApp({ route, mode }: { route: string; mode: ApiMode }) {
   const [release, setRelease] = useState(getHealth()?.kbRelease ?? '');
   useEffect(() => { api.health().then((x) => setRelease(x.kbRelease)).catch(() => {}); }, [path]);
   const [counts, setCounts] = useState<Record<string, number>>({});
-  useEffect(() => { api.dashboard().then((d) => setCounts({ gaps: d.openGaps, alerts: d.openAlerts })).catch(() => {}); }, [page]);
+  useEffect(() => {
+    const load = () => api.dashboard().then((d) => setCounts({ gaps: d.openGaps, alerts: d.openAlerts })).catch(() => {});
+    load();
+    window.addEventListener(NAV_COUNTS_EVENT, load);
+    return () => window.removeEventListener(NAV_COUNTS_EVENT, load);
+  }, [page]);
   useSlashFocus();
 
   let body;

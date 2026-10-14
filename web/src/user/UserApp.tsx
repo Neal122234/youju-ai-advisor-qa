@@ -6,7 +6,7 @@ import { Icon, toast } from '../ui/kit';
 import { fmtTime } from '../ui/labels';
 import { AnswerCard } from './AnswerCard';
 import { SourceSheet } from './SourceSheet';
-import { FAQ_GROUPS, followUps } from './suggest';
+import { FAQ_GROUPS, followUps, renumberCitations } from './suggest';
 
 type Msg =
   | { id: string; ts: number; role: 'user'; text: string }
@@ -27,6 +27,19 @@ const KIND_GROUP: { kind: QuickQuestion['kind']; label: string; hint: string }[]
   { kind: 'human', label: '用户要人工', hint: '生成工单' },
 ];
 const STAGES = ['正在查找资料…', '正在组织回答…', '正在核对出处，请稍候…'];
+
+const CHAT_KEY = 'youju.chat';
+function loadChat(): { msgs: Msg[]; risk: RiskLevel } | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(CHAT_KEY) ?? 'null');
+    if (!v || !Array.isArray(v.msgs)) return null;
+    // 恢复的回答不再播放打字动画
+    return { risk: /^C[1-5]$/.test(v.risk) ? v.risk : 'C3', msgs: v.msgs.map((m: Msg) => (m.role === 'assistant' ? { ...m, fresh: false } : m)) };
+  } catch { return null; }
+}
+function saveChat(msgs: Msg[], risk: RiskLevel) {
+  try { sessionStorage.setItem(CHAT_KEY, JSON.stringify({ msgs: msgs.slice(-40), risk })); } catch { /* 存储满或被禁用时只保留内存态 */ }
+}
 
 function newSid() { return 's_' + Math.random().toString(36).slice(2, 10); }
 function sessionId(reset = false) {
@@ -53,8 +66,11 @@ function useVisualViewportHeight() {
 }
 
 export function UserApp({ mode }: { mode: ApiMode }) {
-  const [risk, setRisk] = useState<RiskLevel>('C3');
-  const [msgs, setMsgs] = useState<Msg[]>([]);
+  // 对话与风险等级存 sessionStorage：跳去追溯/后台再回来不丢（同一标签页内有效）
+  const saved = useRef(loadChat());
+  const [risk, setRisk] = useState<RiskLevel>(saved.current?.risk ?? 'C3');
+  const [msgs, setMsgs] = useState<Msg[]>(saved.current?.msgs ?? []);
+  useEffect(() => { saveChat(msgs, risk); }, [msgs, risk]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState(0);
@@ -75,7 +91,11 @@ export function UserApp({ mode }: { mode: ApiMode }) {
     const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
     const q = qs.get('q');
     const rk = qs.get('risk') as RiskLevel | null;
-    if (q) ask(q, rk && /^C[1-5]$/.test(rk) ? rk : undefined);
+    if (q) {
+      // 去掉深链参数，避免从追溯页返回时重复提问
+      history.replaceState(history.state, '', '#/app');
+      ask(q, rk && /^C[1-5]$/.test(rk) ? rk : undefined);
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 发送中阶段提示
@@ -136,7 +156,7 @@ export function UserApp({ mode }: { mode: ApiMode }) {
     });
     setBusy(true);
     try {
-      const resp = await api.chat({ question, userRisk: r, sessionId: sid.current, history });
+      const resp = renumberCitations(await api.chat({ question, userRisk: r, sessionId: sid.current, history }));
       setMsgs((m) => [...m.map((x) => x.role === 'assistant' ? { ...x, fresh: false } : x), { id: resp.id || 'a' + Date.now(), ts: Date.now(), role: 'assistant', resp, question, fresh: true }]);
     } catch (e: any) {
       setMsgs((m) => [...m, { id: 'e' + Date.now(), ts: Date.now(), role: 'error', text: e?.message ?? '请求失败', retry: question, risk: r }]);

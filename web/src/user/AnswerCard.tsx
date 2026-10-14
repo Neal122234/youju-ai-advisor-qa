@@ -113,7 +113,7 @@ export function AnswerCard({ resp, ts, animate, followUps, onAsk, onSources, sho
               <div className="handoff-h"><Icon name="headset" /> <b>已为您转接人工客服</b></div>
               <div className="kv"><span>工单号</span><code>{resp.handoff.ticketId ?? '生成中'}</code></div>
               <div className="kv"><span>原因</span><span>{resp.handoff.reason}</span></div>
-              <p className="muted small">人工客服将在 30 分钟内回复（交易日 9:00–17:00），结果通过 App 消息通知您。</p>
+              <p className="muted small">人工客服将在服务时间内回复，结果通过 App 消息通知您。</p>
             </div>
           )}
 

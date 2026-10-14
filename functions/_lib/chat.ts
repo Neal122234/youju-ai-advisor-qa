@@ -10,7 +10,7 @@ import { uid } from './http';
 
 const edgeCache = () => (globalThis.caches as unknown as { default: Cache }).default;
 /** 管线逻辑版本：改动判定/提示词时递增，避免命中旧逻辑的缓存结果 */
-export const PIPELINE_VERSION = 'p16';
+export const PIPELINE_VERSION = 'p20';
 export const CACHE_TTL_MS = 10 * 60_000;
 const memCache = new Map<string, { at: number; resp: ChatResponse }>();
 export function clearChatCache() { memCache.clear(); }
@@ -83,7 +83,8 @@ export async function answer(env: Env, req: ChatRequest, faults: Set<Fault>, o: 
       if (r) { r.pass = false; r.detail += `（embedding 失败：${embedNote[0]}）`; }
     }
     // 仅缓存真正调用了 LLM 且非转人工的结果（转人工每次要生成新工单）
-    if (useCache && resp.mode === 'llm' && resp.model && !resp.decision.startsWith('handoff')) await cachePut(cacheKey, resp);
+    // 只缓存高置信的确定结果；answered_caveat / 转人工 / 降级不缓存，避免把不稳定的结果按风险等级固化 10 分钟
+    if (useCache && resp.mode === 'llm' && resp.model && ['answered', 'partial_refusal', 'refused'].includes(resp.decision) && resp.confidence >= 0.62) await cachePut(cacheKey, resp);
   }
   if (o.persist !== false) await persistChat(db, req, resp, o.sessionTag);
   return resp;

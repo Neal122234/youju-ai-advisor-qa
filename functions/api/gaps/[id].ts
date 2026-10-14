@@ -1,7 +1,7 @@
 // POST /api/gaps/:id {action:'ignore'|'draft'}；draft → 生成草稿文档版本（预填问题样例），返回 docVersionId
 import type { Env } from '../../_lib/env';
-import { HttpError, json, nowIso, readJson, uid } from '../../_lib/http';
-import { first, nextVersion, run, safeArr } from '../../_lib/db';
+import { HttpError, json, nowIso, readJson } from '../../_lib/http';
+import { first, run, safeArr } from '../../_lib/db';
 import { buildFrontMatter } from '../../../core/chunk';
 
 export const onRequestPost: PagesFunction<Env> = async ({ params, request, env }) => {
@@ -19,13 +19,11 @@ export const onRequestPost: PagesFunction<Env> = async ({ params, request, env }
   }
   if (b.action !== 'draft') throw new HttpError(400, 'BAD_INPUT', "action 只能是 'ignore' 或 'draft'");
   const docKey = (b.docKey && /^[a-z0-9][a-z0-9-]{2,63}$/.test(b.docKey) ? b.docKey : null) ?? gap.doc_key ?? `gap-${id.replace(/^gap_/, '')}`;
+  // 只返回预填内容，不预建占位版本：运营保存（POST /api/kb/docs 带 gapId）时才建 draft，缺口随之进入 drafting
   const ts = nowIso();
   const existing = await first<any>(env.DB, 'SELECT * FROM documents WHERE doc_key = ?', docKey);
   const qs = safeArr(gap.questions_json);
   const title = existing?.title ?? `待补充：${String(gap.sample_question).slice(0, 30)}`;
-  if (!existing) {
-    await run(env.DB, `INSERT INTO documents (doc_key, title, category, product_risk, tags, created_at) VALUES (?, ?, 'investor_edu', NULL, '[]', ?)`, docKey, title, ts);
-  }
   let content: string;
   const pub = existing ? await first<any>(env.DB, `SELECT content FROM doc_versions WHERE doc_key = ? AND status = 'published' ORDER BY version DESC LIMIT 1`, docKey) : null;
   if (pub) {
@@ -34,10 +32,5 @@ export const onRequestPost: PagesFunction<Env> = async ({ params, request, env }
     content = buildFrontMatter({ doc_key: docKey, title, category: existing?.category ?? 'investor_edu', product_risk: existing?.product_risk ?? null, tags: [], source: '待补充出处', effective_date: ts.slice(0, 10) })
       + `## 问题说明\n（待运营依据公开监管规则或示例证券业务规则补写答案；拿不准的写"以官方最新规则为准"。）\n\n## 用户常见问法\n${qs.slice(0, 8).map((q) => `- ${q}`).join('\n')}\n`;
   }
-  const version = await nextVersion(env.DB, docKey);
-  const vid = `dv_${uid().slice(0, 8)}`;
-  await run(env.DB, `INSERT INTO doc_versions (id, doc_key, version, content, change_note, author, status, gap_id, created_at) VALUES (?, ?, ?, ?, ?, '运营', 'draft', ?, ?)`,
-    vid, docKey, version, content, `由知识缺口 ${id} 生成草稿`, id, ts);
-  await run(env.DB, `UPDATE gaps SET status = 'drafting', doc_key = ? WHERE id = ?`, docKey, id);
-  return json({ ok: true, docVersionId: vid, docKey, version, content });
+  return json({ ok: true, docVersionId: null, prefill: true, docKey, gapId: id, title, category: existing?.category ?? 'investor_edu', productRisk: existing?.product_risk ?? null, existing: !!existing, content });
 };

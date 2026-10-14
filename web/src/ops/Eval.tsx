@@ -4,6 +4,10 @@ import type { EvalRun } from '../apiTypes';
 import { DecisionTag, Empty, ErrorBox, Icon, Pager, useTable } from '../ui/kit';
 import { CATEGORY_LABEL, DECISION_LABEL, EVAL_TYPE_LABEL, pct } from '../ui/labels';
 import { PageHead } from './OpsApp';
+import evalQuestions from '../../../eval/questions.json';
+
+const QS = (evalQuestions as { id: string; type: string }[]).map((q) => ({ id: q.id, type: q.type }));
+const TYPES = [...new Set(QS.map((q) => q.type))];
 
 export function EvalPage() {
   const [run, setRun] = useState<EvalRun | null>(null);
@@ -13,12 +17,21 @@ export function EvalPage() {
   const [type, setType] = useState('');
   const [t0, setT0] = useState(0);
   const [prog, setProg] = useState<{ done: number; total: number } | null>(null);
+  const [scope, setScope] = useState<'all' | 'first' | 'type'>('first');
+  const [firstN, setFirstN] = useState(8);
+  const [scopeType, setScopeType] = useState(TYPES[0] ?? 'normal');
+  const [persist, setPersist] = useState(false);
+  const [ranPersist, setRanPersist] = useState(false);
+  const scopeIds = () => scope === 'all' ? undefined : scope === 'first' ? QS.slice(0, Math.max(1, Math.min(QS.length, firstN))).map((q) => q.id) : QS.filter((q) => q.type === scopeType).map((q) => q.id);
+  const scopeCount = scope === 'all' ? QS.length : scopeIds()!.length;
 
-  async function start(ids?: string[]) {
-    setBusy(true); setErr(null); setT0(Date.now()); setProg(null);
+  /** merge=true：只重跑失败项，结果合并回当前列表 */
+  async function start(merge = false) {
+    const ids = merge ? (run?.results.filter((r) => !r.pass).map((r) => r.id) ?? []) : scopeIds();
+    setBusy(true); setErr(null); setT0(Date.now()); setProg(null); setRanPersist(persist);
     try {
-      const r = await api.runEval(ids, (done, total, partial) => { setProg({ done, total }); if (!ids) setRun(partial); });
-      if (ids && run) {
+      const r = await api.runEval(ids, (done, total, partial) => { setProg({ done, total }); if (!merge) setRun(partial); }, { persist });
+      if (merge && run) {
         const m = new Map(r.results.map((x) => [x.id, x]));
         const results = run.results.map((x) => m.get(x.id) ?? x);
         const passed = results.filter((x) => x.pass).length;
@@ -38,13 +51,29 @@ export function EvalPage() {
         title="评测"
         desc="用固定评测集回归：正常、混合、越界、未知、注入、适当性、人工七类问题"
         actions={<>
-          {fails.length > 0 && <button className="btn sm" disabled={busy} onClick={() => start(fails.map((f) => f.id))}>重跑失败项 {fails.length}</button>}
-          <button className="btn sm primary" disabled={busy} onClick={() => start()}>{busy ? '评测中…' : run ? '重新运行' : '运行评测集'}</button>
+          {fails.length > 0 && <button className="btn sm" disabled={busy} onClick={() => start(true)}>重跑失败项 {fails.length}</button>}
+          <button className="btn sm primary" disabled={busy} onClick={() => start()}>{busy ? '评测中…' : `运行 ${scopeCount} 题`}</button>
         </>}
       />
+      <div className="filters eval-opts">
+        <select className="input" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)} aria-label="评测范围" disabled={busy}>
+          <option value="first">只跑前 N 题</option>
+          <option value="type">按类型</option>
+          <option value="all">全部 {QS.length} 题</option>
+        </select>
+        {scope === 'first' && <label className="check">前 <input className="input sm num" type="number" min={1} max={QS.length} value={firstN} onChange={(e) => setFirstN(Math.max(1, Math.min(QS.length, +e.target.value || 1)))} style={{ width: 64 }} disabled={busy} aria-label="题数" /> 题</label>}
+        {scope === 'type' && (
+          <select className="input" value={scopeType} onChange={(e) => setScopeType(e.target.value)} aria-label="题目类型" disabled={busy}>
+            {TYPES.map((x) => <option key={x} value={x}>{EVAL_TYPE_LABEL[x] ?? x}（{QS.filter((q) => q.type === x).length} 题）</option>)}
+          </select>
+        )}
+        <label className="check" title="默认不写入：评测问答不进入问答追溯、总览统计，也不生成工单、缺口和告警">
+          <input type="checkbox" checked={persist} onChange={(e) => setPersist(e.target.checked)} disabled={busy} /> 写入问答日志（会计入总览并生成工单/缺口/告警）
+        </label>
+      </div>
       {err && <ErrorBox msg={err} onRetry={() => start()} />}
       {busy && <div className="progress"><span /><span className="muted small">正在分批运行（每批 8 题）{prog ? `：已完成 ${prog.done}/${prog.total}` : '…'}，线上模式约 2–4 分钟（开始于 {new Date(t0).toLocaleTimeString()}）</span></div>}
-      {!run && !busy && !err && <Empty art="doc" title="还没有评测结果">点击「运行评测集」，逐题对比期望决策、必须引用、禁用词与告警类别。</Empty>}
+      {!run && !busy && !err && <Empty art="doc" title="还没有评测结果">选择范围后运行，逐题对比期望决策、必须引用、禁用词与告警类别。默认不写入生产数据。</Empty>}
       {run && (
         <>
           <div className="eval-sum">
@@ -90,7 +119,7 @@ export function EvalPage() {
                     <td className="nowrap">
                       {r.pass ? <span className="pill tone-green">通过</span> : <span className="pill tone-red">未通过</span>}
                       {!r.pass && r.reasons.length > 0 && <div className="fail-reasons small">{r.reasons.map((x, i) => <div key={i}>{x}</div>)}</div>}
-                      {r.qaId && <div><a className="small" href={`#/ops/logs/${encodeURIComponent(r.qaId)}`}>查看日志</a></div>}
+                      {r.qaId && ranPersist && <div><a className="small" href={`#/ops/logs/${encodeURIComponent(r.qaId)}`}>查看日志</a></div>}
                     </td>
                   </tr>
                 ))}

@@ -206,6 +206,16 @@ export const localApi: ApiClient = {
     if (p.q) r = r.filter((l) => l.question.includes(p.q!) || l.id.includes(p.q!));
     return r.slice(0, p.limit ?? 200).map(({ response: _r, ...rest }) => ({ ...rest }));
   },
+  async logsPage(p) {
+    await ensure();
+    let r = S().logs;
+    if (p.decision) r = r.filter((l) => (p.decision === 'handoff' ? DECISIONS_HANDOFF(l.decision) : p.decision!.split(',').includes(l.decision)));
+    if (p.q) r = r.filter((l) => l.question.includes(p.q!) || l.id.includes(p.q!));
+    const key = { ts: (l: any) => l.ts, confidence: (l: any) => l.confidence, latency: (l: any) => l.latencyMs, risk: (l: any) => l.userRisk }[p.sort ?? 'ts'];
+    const m = p.dir === 'asc' ? 1 : -1;
+    r = [...r].sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * m; });
+    return { total: r.length, items: r.slice(p.offset, p.offset + p.limit).map(({ response: _r, ...rest }) => ({ ...rest })) };
+  },
   async log(id) {
     await ensure();
     const l = S().logs.find((x) => x.id === id);
@@ -244,17 +254,14 @@ export const localApi: ApiClient = {
     const g = S().gaps.find((x) => x.id === id);
     if (!g) throw new Error('缺口不存在');
     if (action === 'ignore') { g.status = 'ignored'; save(); return null; }
-    const docKey = g.docKey ?? `faq-${g.id.slice(-6)}`;
-    if (!S().docs.find((d) => d.docKey === docKey)) {
-      S().docs.push({ docKey, title: `补充问答：${g.sampleQuestion.slice(0, 20)}`, category: 'investor_edu', productRisk: null, tags: ['缺口补充'], createdAt: now() });
-    }
-    const content = `## ${g.sampleQuestion.replace(/[？?]$/, '')}\n（请依据公开监管规则/交易所规则撰写答案，拿不准的写“以官方最新规则为准”。）\n`;
-    const prev = S().versions.filter((v) => v.docKey === docKey);
-    const v: DocVersion = { id: rid('dv'), docKey, version: Math.max(0, ...prev.map((x) => x.version)) + 1, content, changeNote: `补充缺口：${g.sampleQuestion}`, author: '运营（演示）', status: 'draft', gapId: g.id, createdAt: now(), publishedAt: null };
-    S().versions.push(v);
-    g.status = 'drafting'; g.docKey = docKey; g.draftVersionId = v.id;
-    save();
-    return { docVersionId: v.id, docKey };
+    // 与线上一致：只返回预填内容，不预建草稿；运营在编辑器保存（带 gapId）时才建草稿
+    const docKey = g.docKey ?? `gap-${g.id.slice(-6).toLowerCase()}`;
+    const existing = S().docs.find((d) => d.docKey === docKey);
+    const pub = existing ? S().versions.filter((v) => v.docKey === docKey && v.status === 'published').sort((a, b) => b.version - a.version)[0] : null;
+    const content = pub
+      ? `${pub.content.trimEnd()}\n\n## 补充：${g.sampleQuestion.slice(0, 30)}\n（待运营依据公开规则补写；用户问法：${g.questions.slice(0, 5).join(' / ')}）\n`
+      : `## 问题说明\n（待运营依据公开监管规则或示例证券业务规则补写答案；拿不准的写"以官方最新规则为准"。）\n\n## 用户常见问法\n${g.questions.slice(0, 8).map((q) => `- ${q}`).join('\n')}\n`;
+    return { docVersionId: null, docKey, gapId: g.id, title: existing?.title ?? `待补充：${g.sampleQuestion.slice(0, 30)}`, category: existing?.category ?? 'investor_edu', productRisk: (existing?.productRisk ?? null) as any, content, existing: !!existing };
   },
   async gapVerify(id) {
     await ensure();
@@ -280,7 +287,7 @@ export const localApi: ApiClient = {
   async updateTicket(id, body) {
     await ensure();
     const t = S().tickets.find((x) => x.id === id);
-    if (t) { t.status = body.status; if (body.reply !== undefined) t.reply = body.reply; t.assignee = t.assignee ?? '运营（演示）'; t.updatedAt = now(); save(); }
+    if (t) { if (body.reopen && t.status === 'closed') t.status = 'processing'; else if (body.status) t.status = body.status; if (body.reply !== undefined) t.reply = body.reply; t.assignee = t.assignee ?? '运营（演示）'; t.updatedAt = now(); save(); }
   },
   async docs() { await ensure(); return S().docs.map(docRow); },
   async doc(docKey) {
@@ -298,7 +305,7 @@ export const localApi: ApiClient = {
     const prev = S().versions.filter((v) => v.docKey === docKey);
     const v: DocVersion = { id: rid('dv'), docKey, version: Math.max(0, ...prev.map((x) => x.version)) + 1, content: input.content, changeNote: input.changeNote, author: '运营（演示）', status: 'draft', gapId: input.gapId ?? null, createdAt: now(), publishedAt: null };
     S().versions.push(v);
-    if (input.gapId) { const g = S().gaps.find((x) => x.id === input.gapId); if (g) g.draftVersionId = v.id; }
+    if (input.gapId) { const g = S().gaps.find((x) => x.id === input.gapId); if (g) { g.draftVersionId = v.id; g.docKey = docKey; if (g.status === 'open') g.status = 'drafting'; } }
     save();
     return v;
   },
@@ -312,23 +319,42 @@ export const localApi: ApiClient = {
     await ensure();
     const src = S().versions.find((v) => v.docKey === docKey && v.version === version);
     if (!src) throw new Error('版本不存在');
+    if (src.status === 'draft' || !src.publishedAt) throw new Error(`v${version} 从未发布过，不能作为回滚目标；如需上线请走发布流程`);
     const prev = S().versions.filter((v) => v.docKey === docKey);
     const v: DocVersion = { ...src, id: rid('dv'), version: Math.max(...prev.map((x) => x.version)) + 1, changeNote: `回滚到 v${version}`, author: '运营（演示）', status: 'draft', createdAt: now(), publishedAt: null };
     S().versions.push(v);
     return makeRelease([v], `回滚 ${docKey} 到 v${version}`);
   },
   async releases() { await ensure(); return S().releases; },
+  async unpublish(docKey, note) {
+    await ensure();
+    const pub = S().versions.find((v) => v.docKey === docKey && v.status === 'published');
+    if (!pub) throw new Error(`${docKey} 当前没有已发布版本，无需下线`);
+    pub.status = 'archived';
+    S().releaseNo++;
+    const rel: Release = { id: rid('rel'), releaseNo: `v${S().releaseNo}`, note: note || `下线 ${docKey}（v${pub.version}）`, createdAt: now(), createdBy: '运营（演示）', docVersions: S().versions.filter((v) => v.status === 'published').map((v) => `${v.docKey}@v${v.version}`) };
+    S().releases.unshift(rel);
+    chunkCache = null; save();
+    return rel;
+  },
+  async reopenTicket(id, reply) {
+    await ensure();
+    const t = S().tickets.find((x) => x.id === id);
+    if (!t) throw new Error('工单不存在');
+    if (t.status !== 'closed') throw new Error('只有已关闭的工单可以重新打开');
+    t.status = 'processing'; if (reply !== undefined) t.reply = reply; t.updatedAt = now(); save();
+  },
   async previewChunks(content): Promise<PreviewChunk[]> {
     return chunkDoc({ docKey: 'preview', title: '预览', version: 0, content, category: 'investor_edu', productRisk: null }).map((c) => ({ ord: c.ord, heading: c.heading, text: c.text }));
   },
-  async runEval(ids): Promise<EvalRun> {
+  async runEval(ids, _onProgress, opts): Promise<EvalRun> {
     await ensure();
     let qs = evalQuestionsRaw as unknown as EvalQuestion[];
     if (ids?.length) qs = qs.filter((q) => ids.includes(q.id));
     const results = [];
     for (const q of qs) {
       try {
-        const r = await chatAndLog({ question: q.question, userRisk: q.userRisk ?? 'C3', sessionId: 'eval' }, { sideEffects: false });
+        const r = await chatAndLog({ question: q.question, userRisk: q.userRisk ?? 'C3', sessionId: 'eval' }, { sideEffects: false, persist: opts?.persist === true });
         results.push(judge(q, r));
       } catch (e: any) { results.push(judge(q, null, e?.message)); }
     }

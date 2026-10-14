@@ -123,7 +123,7 @@ const GENERIC_TERMS = new Set(['风险', '收益', '投资者', '本金', '亏�
   '投资者教育', '理财', '证券账户', '资金账户', '交易所', '基金', '股票', '市值', '新股', '分红', '波动', '流动性', '杠杆', '手续费', '佣金', '密码']);
 // 量词只在修饰对象时计（"部分 ETF""所有投资者"），"超过部分可按 1 股递增"里的"部分"不算
 const QUANT_RE = /(部分|个别|某些|一些|多数|大部分|大多数|少数|全部|所有|一律|仅|只有)(?=\s*[\u4e00-\u9fa5a-z]{0,4}?(etf|lof|基金|品种|股票|证券|产品|券商|投资者|债券|公司|板块|情况|交易|个股|账户|客户|业务))/gi;
-const NEG_RE = /(不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|无需|无法|禁止|没有|未|勿)/;
+const NEG_RE = /(不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|不设|不收|不受|不计|不参与|不支持|无需|无法|禁止|没有|未|勿|免征|免收)/;
 
 function keyTerms(sentence: string): string[] {
   const t = normalizeText(sentence.replace(/\[\d+\]/g, ''));
@@ -136,11 +136,33 @@ function keyTerms(sentence: string): string[] {
 
 /** 逐句核验：重合率 + 数字核验 + 关键术语核验 + 否定/量词变化核验。任一不过关视为无依据。 */
 /** 常见同义/简称（核验术语时，原文出现任一写法即算覆盖） */
-const SYNONYMS: Record<string, string[]> = {
+export const SYNONYMS: Record<string, string[]> = {
   两融: ['融资融券'], 融资融券: ['两融'], 爆仓: ['强制平仓', '平仓'], 货币基金: ['货币市场基金', '货币型'], 债券基金: ['债券型基金', '纯债', '债基'],
   股票型基金: ['股票基金'], 混合型基金: ['混合基金'], 开户: ['开立', '开通'], 销户: ['注销'], 转户: ['转托管'], etf: ['交易型开放式指数基金'],
-  lof: ['上市型开放式基金'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
+  lof: ['上市型开放式基金'], 赎回: ['申赎'], 申购: ['申赎'], 基金净值: ['净值'], 涨跌幅限制: ['涨跌幅'], 跌停: ['涨跌幅'], 涨停: ['涨跌幅'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
 };
+/** 产品/业务主体词（从具体到宽泛）。问题主体与被引资料主体不一致时（问基金分红税、资料讲股票红利税）判为不覆盖 */
+const SUBJECTS: string[][] = [
+  ['联接基金'], ['etf', '交易型开放式指数基金'], ['lof', '上市型开放式基金'], ['reits', '基础设施基金'], ['qdii'], ['fof'],
+  ['货币基金', '货币市场基金', '货币型'], ['债券基金', '债券型基金', '纯债'], ['指数基金'], ['股票型基金', '股票基金'], ['混合型基金', '混合基金'], ['私募基金', '私募'],
+  ['可交换债'], ['可转债', '可转换公司债券'], ['国债期货'], ['国债逆回购', '逆回购'], ['国债'], ['股票期权', '期权'], ['期货'], ['融资融券', '两融', '融资', '融券'],
+  ['港股通'], ['北交所', '北京证券交易所'], ['科创板'], ['创业板'], ['新三板'], ['b股'], ['美股'], ['港股'], ['新股', '打新', '申购新股'], ['基金'],
+];
+/** 返回问题中最具体的主体组（只取最具体的一层，"黄金ETF联接基金"取联接基金/ETF，不取"基金"） */
+export function questionSubjects(question: string): string[][] {
+  const q = normalizeText(question).replace(/\s+/g, '');
+  const hit = SUBJECTS.filter((g) => g.some((w) => q.includes(w)));
+  const specific = hit.filter((g) => g[0] !== '基金');
+  return specific.length ? specific : hit;
+}
+/** 被引资料是否覆盖问题主体：问题里任一具体主体在被引块（含标题、小标题）中出现即可 */
+export function subjectCovered(question: string, chunks: Chunk[]): { ok: boolean; subjects: string[] } {
+  const subs = questionSubjects(question);
+  if (!subs.length || !chunks.length) return { ok: true, subjects: [] };
+  const pool = normalizeText(chunks.map((c) => `${c.docTitle}${c.heading}${c.text}`).join('')).replace(/\s+/g, '');
+  return { ok: subs.some((g) => g.some((w) => pool.includes(w))), subjects: subs.map((g) => g[0]) };
+}
+
 /** 问题里出现的术语：答案复述它们不算编造，前提是句子与依据块高度重合（≥ 0.6） */
 const QUESTION_TERM_MIN_OVERLAP = 0.6;
 
@@ -165,9 +187,16 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
     const pool = support.map((n) => raw[n - 1]).join('');
     const missingNumbers = numericFacts(s).filter((x) => !pool.includes(normNum(x)) && !raw.join('').includes(normNum(x)));
     const supOverlap = support.length ? Math.max(...support.map((n) => ov(n - 1))) : 0;
+    // 术语可在"依据块 + 与本句高度重合（≥0.5）的其他检索块"中找到
+    const termPool = pool + numbered.map((_, i) => (ov(i) >= 0.5 ? raw[i] : '')).join('');
     const missingTerms = keyTerms(plain).filter((w) => {
+      if (termPool.includes(normNum(w)) || (SYNONYMS[w] ?? []).some((x) => termPool.includes(normNum(x)))) return false;
       if (pool.includes(normNum(w)) || (SYNONYMS[w] ?? []).some((x) => pool.includes(normNum(x)))) return false;
       if (qNorm.includes(normNum(w)) && supOverlap >= QUESTION_TERM_MIN_OVERLAP) return false;
+      // 复合术语：其中更短的领域词在依据块中出现即可（"涨跌幅限制"⊃"涨跌幅"、"基金净值"⊃"净值"）
+      if (financeTermsIn(w).some((sub) => sub !== w && sub.length >= 2 && !GENERIC_TERMS.has(sub) && termPool.includes(normNum(sub)))) return false;
+      // 术语的字二元组全部来自问题（问题里拆开写的"涨跌幅有限制"）且句子与依据块高度重合
+      if (supOverlap >= QUESTION_TERM_MIN_OVERLAP && [...charBigramSet(w)].every((b) => qNorm.includes(b))) return false;
       return true;
     });
     let qualifierChange: string | null = null;

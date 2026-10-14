@@ -111,7 +111,8 @@ describe('知识库发布闭环', () => {
     const g = (await call(gaps.onRequestGet, 'GET', '/api/gaps?status=open')).body.items.find((x: any) => x.sampleQuestion.includes('赎回'));
     expect(g).toBeTruthy();
     const draft = await call(gapAction.onRequestPost, 'POST', `/api/gaps/${g.id}`, { action: 'draft' }, {}, { id: g.id });
-    expect(draft.body.docVersionId).toBeTruthy();
+    expect(draft.body.docVersionId).toBeNull();   // N11：不预建占位版本
+    expect(draft.body.content).toContain('用户常见问法');
     const saved = await call(docs.onRequestPost, 'POST', '/api/kb/docs', { docKey: draft.body.docKey, title: '基金赎回到账时间', category: 'product_rule', productRisk: null, tags: ['赎回'], gapId: g.id, changeNote: '补充',
       content: '## 基金赎回多久到账\n货币基金赎回一般 T+1 个交易日到账；股票基金、混合基金赎回一般 T+1 至 T+4 个交易日到账，以基金合同为准。' });
     expect(saved.body.gapId).toBe(g.id);
@@ -228,5 +229,23 @@ describe('QA 第 1 轮：接口边界', () => {
     expect(res[20]).toBe(false);
     const { faultyDb } = await import('../functions/_lib/db');
     expect(await d1RateLimit(faultyDb(), 'chat', '9.9.9.9', 20, now)).toBeNull();   // D1 失败 → 放行
+  });
+});
+
+describe('QA 第 2 轮：下线与回滚', () => {
+  it('N8 rollback 拒绝草稿；unpublish 生成新 release 并让块失效', async () => {
+    const d = await call(docs.onRequestPost, 'POST', '/api/kb/docs', { docKey: 'qa-unpub', title: '下线测试', category: 'investor_edu', content: '## 段\n下线测试正文内容。' });
+    await expect(call(rollback.onRequestPost, 'POST', '/api/kb/rollback', { docKey: 'qa-unpub', version: 1 })).rejects.toMatchObject({ status: 400 });
+    const p = await call(publish.onRequestPost, 'POST', '/api/kb/publish', { versionIds: [d.body.id] });
+    const un = await import('../functions/api/kb/unpublish');
+    const r = await call(un.onRequestPost, 'POST', '/api/kb/unpublish', { docKey: 'qa-unpub' });
+    expect(Number(r.body.releaseNo.slice(1))).toBe(Number(p.body.releaseNo.slice(1)) + 1);
+    const dd = await call(doc.onRequestGet, 'GET', '/api/kb/docs/qa-unpub', undefined, {}, { docKey: 'qa-unpub' });
+    expect(dd.body.doc.chunks).toBe(0);
+    expect(dd.body.doc.currentVersion).toBeNull();
+    await expect(call(un.onRequestPost, 'POST', '/api/kb/unpublish', { docKey: 'qa-unpub' })).rejects.toMatchObject({ status: 409 });
+    // 下线后可回滚到曾发布的 v1 重新上线
+    const rb = await call(rollback.onRequestPost, 'POST', '/api/kb/rollback', { docKey: 'qa-unpub', version: 1 });
+    expect(rb.body.rolledBackTo).toBe(1);
   });
 });

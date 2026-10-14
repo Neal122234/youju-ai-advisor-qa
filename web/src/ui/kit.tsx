@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ChatResponse, Citation, Decision } from '../apiTypes';
 import { DECISION_LABEL, DECISION_TONE, THRESHOLDS, pct } from './labels';
 
@@ -222,8 +222,10 @@ export function Modal({ title, onClose, children, wide, footer, tone }: { title:
     const prev = document.activeElement as HTMLElement | null;
     const el = ref.current;
     // 首个输入控件优先，否则聚焦主按钮
-    const first = el?.querySelector<HTMLElement>('[data-autofocus]') ?? el?.querySelector<HTMLElement>('.modal-b input, .modal-b textarea, .modal-b select') ?? el?.querySelector<HTMLElement>('.modal-f .btn.primary, .modal-f .btn.danger');
+    // 首个可用控件（跳过 disabled，disabled 按钮 focus() 会静默失败、焦点留在 body）；都没有则聚焦对话框本身
+    const first = el?.querySelector<HTMLElement>('[data-autofocus]') ?? el?.querySelector<HTMLElement>('.modal-b input:not(:disabled), .modal-b textarea:not(:disabled), .modal-b select:not(:disabled)') ?? el?.querySelector<HTMLElement>('.modal-f .btn.primary:not(:disabled), .modal-f .btn.danger:not(:disabled)');
     (first ?? el)?.focus();
+    if (el && !el.contains(document.activeElement)) el.focus();
     const k = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); closeRef.current(); return; }
       if (e.key === 'Tab' && el) {
@@ -314,7 +316,7 @@ export function useTable<T>(rows: T[], accessors: Record<string, (r: T) => strin
   );
   return { view, page, pages, total: sorted.length, size, setPage: (n: number) => setPageS(String(n)), resetPage: () => setPageS('1'), th };
 }
-function SortTh({ active, dir, onClick, children, className }: { active: boolean; dir: SortDir; onClick: () => void; children: ReactNode; className?: string }) {
+export function SortTh({ active, dir, onClick, children, className }: { active: boolean; dir: SortDir; onClick: () => void; children: ReactNode; className?: string }) {
   return (
     <th className={className} aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
       <button type="button" className={`th-sort${active ? ' on' : ''}`} onClick={onClick}>
@@ -365,6 +367,10 @@ export function useRestoreListPos(listKey: string, ready: boolean) {
     } catch { /* ignore */ }
   }, [ready, listKey]);
 }
+
+/* ---------- 侧栏待处理角标：处理告警/缺口后通知刷新 ---------- */
+export const NAV_COUNTS_EVENT = 'youju:nav-counts';
+export const refreshNavCounts = () => window.dispatchEvent(new Event(NAV_COUNTS_EVENT));
 
 /* ---------- 面包屑 ---------- */
 export function Crumbs({ items }: { items: { label: string; href?: string }[] }) {
@@ -423,11 +429,28 @@ export function AnswerText({ text, onCite, active, citations }: { text: string; 
     const b = box.current.getBoundingClientRect(), r = el.getBoundingClientRect();
     const w = Math.min(260, b.width);
     const left = Math.max(0, Math.min(b.width - w, r.left - b.left - 20));
-    const above = r.top > 200;
+    // 以滚动容器（对话区/后台主区）的可视范围判断上下空间，预览约 190px 高；上方放不下就翻到下方
+    const sc = box.current.closest('.phone-msgs, .ops-main, .sheet-list')?.getBoundingClientRect();
+    const top0 = sc ? sc.top : 0, bottom0 = sc ? sc.bottom : window.innerHeight;
+    const PV_H = 190;
+    const spaceAbove = r.top - top0, spaceBelow = bottom0 - r.bottom;
+    const above = spaceAbove >= PV_H + 8 || (spaceAbove > spaceBelow && spaceBelow < PV_H + 8);
     setPv({ n, left, top: above ? r.top - b.top - 6 : r.bottom - b.top + 6, above });
   };
   const hide = () => { timer.current = window.setTimeout(() => setPv(null), 120); };
   const c = pv ? citations?.find((x) => x.n === pv.n) : null;
+  // 渲染后校正：预览实际高度超出容器时，夹回可视范围内
+  const pvRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const p = pvRef.current, bx = box.current;
+    if (!p || !bx) return;
+    const sc = bx.closest('.phone-msgs, .ops-main, .sheet-list')?.getBoundingClientRect();
+    const lo = (sc?.top ?? 0) + 4, hi = (sc?.bottom ?? window.innerHeight) - 4;
+    const pr = p.getBoundingClientRect();
+    let dy = 0;
+    if (pr.top < lo) dy = lo - pr.top; else if (pr.bottom > hi) dy = hi - pr.bottom;
+    p.style.marginTop = dy ? `${dy}px` : '';
+  }, [pv]);
   return (
     <div className="answer-text" ref={box}>
       {parts.map((p, i) => {
@@ -442,7 +465,7 @@ export function AnswerText({ text, onCite, active, citations }: { text: string; 
         return <span key={i}>{p}</span>;
       })}
       {pv && c && (
-        <div className={`cite-pv${pv.above ? ' above' : ''}`} style={{ left: pv.left, top: pv.top }} role="tooltip" onMouseEnter={() => window.clearTimeout(timer.current)} onMouseLeave={hide}>
+        <div ref={pvRef} className={`cite-pv${pv.above ? ' above' : ''}`} style={{ left: pv.left, top: pv.top }} role="tooltip" onMouseEnter={() => window.clearTimeout(timer.current)} onMouseLeave={hide}>
           <div className="cite-pv-h"><span className="cite static">{c.n}</span><b>{c.docTitle}</b></div>
           <div className="cite-pv-m">v{c.version} · {c.heading}</div>
           <p>{c.snippet.length > 90 ? c.snippet.slice(0, 90) + '…' : c.snippet}</p>

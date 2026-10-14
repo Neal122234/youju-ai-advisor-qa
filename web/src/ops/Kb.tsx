@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { DocDetail, DocVersion, KbDoc, PreviewChunk, ProductRisk } from '../apiTypes';
-import { Crumbs, Empty, ErrorBox, Icon, Loading, Modal, Pager, TableSkeleton, confirmDialog, go, lastListHref, rememberListPos, toast, useAsync, useHashState, useRestoreListPos, useTable } from '../ui/kit';
+import type { DocDetail, DocVersion, GapDraftResult, KbDoc, PreviewChunk, ProductRisk } from '../apiTypes';
+import { Crumbs, Empty, ErrorBox, Icon, Loading, Modal, Pager, TableSkeleton, confirmDialog, go, lastListHref, rememberListPos, refreshNavCounts, toast, useAsync, useHashState, useRestoreListPos, useTable } from '../ui/kit';
 import { SearchBox } from './Logs';
 import { DOC_CATEGORY_LABEL, VERSION_STATUS_LABEL, fmtTime } from '../ui/labels';
 import { lineDiff } from './diff';
+import { parseFrontMatter } from '../../../core/chunk';
 import { PageHead } from './OpsApp';
 
 const V_TONE: Record<string, string> = { draft: 'yellow', published: 'green', archived: 'gray' };
@@ -111,7 +112,11 @@ export function PublishModal({ onClose, onDone, preselect, gapId }: { onClose: (
       const docs = await api.docs();
       const details = await Promise.all(docs.map((d) => api.doc(d.docKey).catch(() => null)));
       const out: (DocVersion & { title: string })[] = [];
-      details.forEach((d) => d?.versions.filter((v) => v.status === 'draft').forEach((v) => out.push({ ...v, title: d.doc.title })));
+      // 草稿的标题取该版本自己的 front-matter（文档表里的标题要到发布后才更新）
+      details.forEach((d) => d?.versions.filter((v) => v.status === 'draft').forEach((v) => {
+        const t = parseFrontMatter(v.content).meta.title;
+        out.push({ ...v, title: typeof t === 'string' && t ? t : d.doc.title });
+      }));
       out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       setDrafts(out);
       if (!preselect?.length && out.length === 1) setSel(new Set([out[0].id]));
@@ -195,7 +200,21 @@ function DocPage({ docKey }: { docKey: string }) {
     if (!ok) return;
     setBusy(true);
     try { const r = await api.rollback(doc.docKey, v.version); toast(`已回滚，新版本 ${r.releaseNo}`, 'green'); reload(); }
-    catch (e: any) { toast('回滚失败：' + e.message, 'red'); } finally { setBusy(false); }
+    catch (e: any) {
+      const msg = e?.code === 'NOT_PUBLISHED_VERSION' ? `v${v.version} 从未发布过，不能作为回滚目标；如需上线请走发布流程` : e.message;
+      toast('回滚失败：' + msg, 'red');
+    } finally { setBusy(false); }
+  }
+  async function unpublish(v: DocVersion) {
+    const ok = await confirmDialog({
+      title: `下线「${doc.title}」？`,
+      body: `当前发布的 v${v.version} 将被归档、对应知识块立即失效，生成一个不含该文档的新知识版本；用户再问相关问题时检索不到这篇文档。之后可在版本历史里回滚到 v${v.version} 重新上线。`,
+      confirmText: '确认下线', danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try { const r = await api.unpublish(doc.docKey); toast(`已下线，新版本 ${r.releaseNo}`, 'green'); reload(); }
+    catch (e: any) { toast('下线失败：' + (e?.code === 'NOT_PUBLISHED' ? '该文档当前没有已发布版本' : e.message), 'red'); } finally { setBusy(false); }
   }
 
   return (
@@ -218,7 +237,9 @@ function DocPage({ docKey }: { docKey: string }) {
                   <span className="v-note">{v.changeNote || '无说明'}</span>
                   <span className="muted small num">{v.author}，{fmtTime(v.publishedAt ?? v.createdAt)}</span>
                 </button>
-                {v.status === 'archived' && <button className="btn sm ghost" disabled={busy} onClick={() => rollback(v)}>回滚到此版</button>}
+                {/* 只有发布过又被归档的版本可回滚；当前发布版本可下线；草稿走发布流程 */}
+                {v.status === 'archived' && v.publishedAt && <button className="btn sm ghost" disabled={busy} onClick={() => rollback(v)}>回滚到此版</button>}
+                {v.status === 'published' && <button className="btn sm ghost danger-t" disabled={busy} onClick={() => unpublish(v)}>下线</button>}
               </li>
             ))}
           </ol>
@@ -261,11 +282,17 @@ function DiffView({ a, b }: { a: string; b: string }) {
 
 /* ---------------- 编辑器 ---------------- */
 const RISKS: ProductRisk[] = ['R1', 'R2', 'R3', 'R4', 'R5'];
+export const prefillKey = (gapId: string) => `youju.prefill.${gapId}`;
+function readPrefill(gapId: string | null): GapDraftResult | null {
+  if (!gapId) return null;
+  try { return JSON.parse(sessionStorage.getItem(prefillKey(gapId)) ?? 'null'); } catch { return null; }
+}
 
 function Editor({ query }: { query: URLSearchParams }) {
   const docKeyQ = query.get('doc');
   const versionQ = query.get('version');
   const gapId = query.get('gap');
+  const prefill = query.get('prefill') ? readPrefill(gapId) : null;
   const isNew = !docKeyQ;
   const [detail, setDetail] = useState<DocDetail | null>(null);
   const [loading, setLoading] = useState(!isNew);
@@ -273,6 +300,7 @@ function Editor({ query }: { query: URLSearchParams }) {
   const [chunks, setChunks] = useState<PreviewChunk[] | null>(null);
   const [pvErr, setPvErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<DocVersion | null>(null);
+  const [created, setCreated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pub, setPub] = useState(false);
   const [published, setPublished] = useState<string | null>(null);
@@ -282,6 +310,18 @@ function Editor({ query }: { query: URLSearchParams }) {
   }, [gapId]);
 
   useEffect(() => {
+    // 缺口起草：用后端返回的预填内容填表（还没有草稿，保存时才建）
+    if (prefill) {
+      const { meta, body } = parseFrontMatter(prefill.content ?? '');
+      const t = typeof meta.title === 'string' && meta.title ? meta.title : prefill.title ?? '';
+      setForm({
+        docKey: prefill.docKey ?? '', title: t, category: prefill.category ?? 'investor_edu', productRisk: (prefill.productRisk ?? '') as '' | ProductRisk,
+        tags: Array.isArray(meta.tags) ? (meta.tags as unknown[]).map(String).join('，') : '', content: body.replace(/^\n+/, ''), changeNote: '补充知识缺口',
+      });
+      if (docKeyQ) api.doc(docKeyQ).then(setDetail).catch(() => {}).finally(() => setLoading(false));
+      else setLoading(false);
+      return;
+    }
     if (!docKeyQ) {
       if (gapId) setForm((f) => ({ ...f, changeNote: '补充知识缺口' }));
       return;
@@ -289,12 +329,18 @@ function Editor({ query }: { query: URLSearchParams }) {
     api.doc(docKeyQ).then((d) => {
       setDetail(d);
       const v = d.versions.find((x) => x.id === versionQ) ?? d.versions.find((x) => x.status === 'draft') ?? d.versions.find((x) => x.status === 'published') ?? d.versions[0];
+      // 标题等元数据只以表单为准：版本正文里的 front-matter 拆出来填进表单，正文框只留 Markdown 正文；保存时后端按表单重建 front-matter
+      const { meta, body } = parseFrontMatter(v?.content ?? '');
+      const fmStr = (k: string) => (typeof meta[k] === 'string' && meta[k] ? String(meta[k]) : '');
+      const fmRisk = fmStr('product_risk');
       setForm({
-        docKey: d.doc.docKey, title: d.doc.title, category: d.doc.category, productRisk: d.doc.productRisk ?? '', tags: d.doc.tags.join('，'),
-        content: v?.content ?? '', changeNote: v?.status === 'draft' ? v.changeNote : gapId ? '补充知识缺口' : '',
+        docKey: d.doc.docKey, title: fmStr('title') || d.doc.title, category: fmStr('category') || d.doc.category,
+        productRisk: ((/^R[1-5]$/.test(fmRisk) ? fmRisk : d.doc.productRisk) ?? '') as '' | ProductRisk,
+        tags: (Array.isArray(meta.tags) && meta.tags.length ? (meta.tags as unknown[]).map(String) : d.doc.tags).join('，'),
+        content: body.replace(/^\n+/, ''), changeNote: v?.status === 'draft' ? v.changeNote : gapId ? '补充知识缺口' : '',
       });
     }).catch((e) => toast('载入文档失败：' + e.message, 'red')).finally(() => setLoading(false));
-  }, [docKeyQ, versionQ, gapId]);
+  }, [docKeyQ, versionQ, gapId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!form.content.trim()) { setChunks([]); return; }
@@ -315,15 +361,21 @@ function Editor({ query }: { query: URLSearchParams }) {
         docKey: form.docKey || undefined, title: form.title.trim(), category: form.category, productRisk: form.productRisk || null,
         tags: form.tags.split(/[,，\s]+/).filter(Boolean), content: form.content, changeNote: form.changeNote || '编辑', gapId,
       });
-      setSaved(v);
+      setSaved(v); setCreated(true);
       if (!form.docKey) setForm((f) => ({ ...f, docKey: v.docKey }));
       toast(`已保存草稿 v${v.version}`, 'green');
+      if (gapId) {
+        // 草稿已建：清掉预填缓存，地址改为按版本打开（刷新后载入已保存的草稿，不再回到预填内容）
+        try { sessionStorage.removeItem(prefillKey(gapId)); } catch { /* ignore */ }
+        history.replaceState(history.state, '', `#/ops/kb/edit?${new URLSearchParams({ gap: gapId, doc: v.docKey, version: v.id })}`);
+        refreshNavCounts();
+      }
     } catch (e: any) { toast('保存失败：' + e.message, 'red'); } finally { setBusy(false); }
   }
 
   const back = <Crumbs items={[
     gapId ? { label: '知识缺口', href: `#/ops/gaps?id=${encodeURIComponent(gapId)}` } : { label: '知识库', href: lastListHref('kb', '#/ops/kb') },
-    ...(docKeyQ ? [{ label: detail?.doc.title ?? docKeyQ, href: `#/ops/kb/doc/${encodeURIComponent(docKeyQ)}` }] : []),
+    ...(docKeyQ ? [{ label: form.title || detail?.doc.title || docKeyQ, href: `#/ops/kb/doc/${encodeURIComponent(docKeyQ)}` }] : []),
     { label: isNew ? '新建文档' : '编辑' },
   ]} />;
   if (loading) return <div className="page">{back}<Loading rows={8} /></div>;
@@ -332,7 +384,7 @@ function Editor({ query }: { query: URLSearchParams }) {
   return (
     <div className="page editor-page">
       {back}
-      <PageHead title={isNew ? '新建文档' : `编辑：${detail?.doc.title ?? form.title}`} desc={gapId ? '由知识缺口发起：保存草稿 → 发布 → 回到缺口做回归验证' : '保存后产生草稿版本，发布后才会被检索到'} />
+      <PageHead title={isNew ? (form.title ? `新建：${form.title}` : '新建文档') : `编辑：${form.title || '未命名文档'}`} desc={gapId ? '由知识缺口发起：保存草稿 → 发布 → 回到缺口做回归验证' : '保存后产生草稿版本，发布后才会被检索到'} />
       {gapId && (
         <ol className="stepper inline">
           {['起草知识', '发布新版本', '回归验证'].map((t, i) => (
@@ -347,7 +399,7 @@ function Editor({ query }: { query: URLSearchParams }) {
           )}
           <div className="form-grid">
             <label className="field"><span>标题</span><input className="input" value={form.title} onChange={set('title')} /></label>
-            <label className="field"><span>doc_key</span><input className="input num" value={form.docKey} onChange={set('docKey')} disabled={!isNew} placeholder="留空自动生成" /></label>
+            <label className="field"><span>doc_key</span><input className="input num" value={form.docKey} onChange={set('docKey')} disabled={!isNew || created} placeholder="留空自动生成" /></label>
             <label className="field"><span>类别</span>
               <select className="input" value={form.category} onChange={set('category')}>{Object.entries(DOC_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
             </label>

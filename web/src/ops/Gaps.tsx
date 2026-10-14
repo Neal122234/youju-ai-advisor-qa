@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { DocDetail, Gap, GapVerifyResult } from '../apiTypes';
-import { DecisionTag, Empty, ErrorBox, Icon, Loading, confirmDialog, go, toast, useAsync, useHashState } from '../ui/kit';
+import { DecisionTag, Empty, ErrorBox, Icon, Loading, confirmDialog, go, refreshNavCounts, toast, useAsync, useHashState } from '../ui/kit';
 import { GAP_STATUS_LABEL, GAP_TYPE_LABEL, fmtTime } from '../ui/labels';
 import { PageHead } from './OpsApp';
+import { prefillKey } from './Kb';
 
 const STATUS_TONE: Record<string, string> = { open: 'orange', drafting: 'yellow', resolved: 'green', ignored: 'gray' };
 
@@ -14,7 +15,8 @@ export function GapsPage({ query }: { query: URLSearchParams }) {
   const [selQ, setSelQ] = useHashState('id');
   const sel = selQ || null;
   const setSel = (v: string | null) => setSelQ(v ?? '');
-  const { data, error, loading, reload } = useAsync(() => api.gaps(status || undefined), [status]);
+  const { data, error, loading, reload: reloadList } = useAsync(() => api.gaps(status || undefined), [status]);
+  const reload = () => { reloadList(); refreshNavCounts(); };
   const list = (data ?? []).filter((g) => !type || g.type === type);
   const gap = list.find((g) => g.id === sel) ?? (data ?? []).find((g) => g.id === sel) ?? null;
   useEffect(() => { if (!sel && list.length && window.innerWidth > 900) setSel(list[0].id); }, [data]); // eslint-disable-line
@@ -81,11 +83,18 @@ function GapDetail({ gap, onChanged, onClose }: { gap: Gap; onChanged: () => voi
     setBusy(true); setErr(null);
     try {
       const r = await api.gapAction(gap.id, 'draft');
-      toast('已生成草稿，进入编辑器补充答案', 'green');
-      onChanged();
       const q = new URLSearchParams({ gap: gap.id });
-      if (r?.docVersionId) q.set('version', r.docVersionId);
-      if (r?.docKey) q.set('doc', r.docKey);
+      if (r?.docVersionId) {
+        // 兼容旧接口：已预建草稿时按版本打开
+        q.set('version', r.docVersionId);
+        if (r.docKey) q.set('doc', r.docKey);
+      } else if (r) {
+        // 新接口只返回预填内容：暂存后带进编辑器，保存时才建草稿
+        try { sessionStorage.setItem(prefillKey(gap.id), JSON.stringify(r)); } catch { /* ignore */ }
+        q.set('prefill', '1');
+        if (r.existing && r.docKey) q.set('doc', r.docKey);
+      }
+      toast('已预填草稿，补充答案后保存', 'green');
       go(`/ops/kb/edit?${q}`);
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }

@@ -1,5 +1,5 @@
 import { api } from '../api';
-import { Empty, ErrorBox, Icon, Pager, TableSkeleton, toast, useAsync, useHashState, useTable } from '../ui/kit';
+import { Empty, ErrorBox, Icon, Pager, TableSkeleton, refreshNavCounts, toast, useAsync, useHashState, useTable } from '../ui/kit';
 import { CATEGORY_LABEL, SEVERITY_LABEL, STAGE_LABEL, fmtTime } from '../ui/labels';
 import { PageHead } from './OpsApp';
 
@@ -21,6 +21,7 @@ export function AlertsPage() {
       await api.ackAlert(id);
       setData((d) => (d ?? []).map((a) => (a.id === id ? { ...a, status: 'ack' as const, handledAt: new Date().toISOString(), handledBy: a.handledBy ?? '运营' } : a)).filter((a) => status === 'all' || !status || a.status === status));
       toast('告警已标记为已处理', 'green');
+      refreshNavCounts();
     } catch (e: any) { toast('操作失败：' + e.message, 'red'); }
   }
   return (

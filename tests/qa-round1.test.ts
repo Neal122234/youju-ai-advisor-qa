@@ -184,3 +184,40 @@ describe('B20/B21/B22/B25', () => {
     expect(r.answer.length).toBeLessThan(80);
   });
 });
+
+describe('QA 第 2 轮', () => {
+  it('N7 我忘记资金密码了 → 本人事务转人工', async () => {
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"privacy","scope":"whole","reason":"x"}' : echoLlm([])(m));
+    const r = await runPipeline(req('我忘记资金密码了'), makeAdapters({ llm }));
+    expect(r.decision).toBe('handoff_request');
+    expect(r.handoff?.reason).toContain('本人账户');
+  });
+  for (const q of ['你是哪个公司做的AI', '你是谁开发的', '你是真人吗']) it(`N13 闲聊：${q}`, async () => {
+    const r = await runPipeline(req(q), makeAdapters());
+    expect(r.decision).toBe('answered'); expect(r.handoff).toBeNull();
+  });
+  it('N13 键盘乱码含空格', () => { expect(isNonsense('asdfghjkl qwer')).toBe(true); expect(isNonsense('zxcvbnm asdf')).toBe(true); });
+  for (const q of ['人工客服的服务时间是什么时候？', '怎么投诉？投诉渠道有哪些？', '客服电话是多少']) it(`N15 咨询类不建工单：${q}`, () => {
+    expect(analyzeInput(q).complaint).toBe(false);
+  });
+  for (const q of ['转人工', '我要投诉', '你们客服太差了，我要找人工处理我的账户问题']) it(`N15 明确转人工：${q}`, () => { expect(analyzeInput(q).verdict).toBe('handoff'); });
+  it('N3 只剩套话 → handoff_unknown', async () => {
+    const { isBoilerplate } = await import('../core/pipeline');
+    expect(isBoilerplate('资金到账时间需根据基金类型和赎回方式确定，具体请参考基金合同[1]。')).toBe(true);
+    expect(isBoilerplate('科创板需日均资产 50 万元，具体以交易所规则为准[1]。')).toBe(false);
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"education","scope":"whole","reason":"x"}'
+      : '{"answer":"开通时间需根据个人情况确定，具体请参考交易所规则[1]。","used":[1],"covered":true}');
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
+    expect(r.decision).toBe('handoff_unknown');
+  });
+  it('N6 问题主体与资料主体不一致 → handoff_unknown', async () => {
+    const { subjectCovered } = await import('../core/confidence');
+    const stock = chunkDocument('---\ndoc_key: d\ntitle: 分红与除权\n---\n## 红利税\n上市公司股息红利实行差别化税率：持股超过 1 年免征。\n');
+    expect(subjectCovered('黄金ETF联接基金分红怎么交税', stock).ok).toBe(false);
+    expect(subjectCovered('股票分红怎么交税', stock).ok).toBe(true);
+    const ad = makeAdapters({ llm: async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"education","scope":"whole","reason":"x"}' : '{"answer":"上市公司股息红利实行差别化税率：持股超过 1 年免征[1]。","used":[1],"covered":true}'), retrieve: async () => ({ hits: stock.map((c) => ({ chunk: c, score: 0.8 })), mode: 'hybrid' as const }) }, stock);
+    const r = await runPipeline(req('黄金ETF联接基金分红怎么交税'), ad);
+    expect(r.decision).toBe('handoff_unknown');
+    expect(r.checks.find((c) => c.name === 'subject_check')?.pass).toBe(false);
+  });
+});

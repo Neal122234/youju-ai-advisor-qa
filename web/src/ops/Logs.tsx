@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { AnswerText, Breakdown, Crumbs, DecisionTag, Empty, ErrorBox, Icon, Loading, Pager, TableSkeleton, go, lastListHref, rememberListPos, useAsync, useHashState, useRestoreListPos, useTable } from '../ui/kit';
+import { AnswerText, Breakdown, Crumbs, DecisionTag, Empty, ErrorBox, Icon, Loading, Pager, SortTh, TableSkeleton, go, lastListHref, rememberListPos, useAsync, useHashState, useRestoreListPos } from '../ui/kit';
 import { CATEGORY_LABEL, CHECK_LABEL, DECISIONS, DECISION_LABEL, MODE_LABEL, SEVERITY_LABEL, STAGE_LABEL, fmtTime } from '../ui/labels';
 import { PageHead } from './OpsApp';
 
@@ -15,41 +15,57 @@ export function SearchBox({ value, onChange, placeholder, label = '搜索' }: { 
 }
 
 const LIST_KEY = 'logs';
+const PAGE = 20;
+type SortKey = 'ts' | 'confidence' | 'latency' | 'risk';
 export function LogsPage({ query: _q }: { query: URLSearchParams }) {
   const [decision, setDecision] = useHashState('decision');
   const [q, setQ] = useHashState('q');
+  const [sort, setSort] = useHashState('sort', 'ts');
+  const [dir, setDir] = useHashState('dir', 'desc');
+  const [pageS, setPageS] = useHashState('page', '1');
+  const page = Math.max(1, +pageS || 1);
   const [qDeb, setQDeb] = useState(q);
   useEffect(() => { const t = setTimeout(() => setQDeb(q), 300); return () => clearTimeout(t); }, [q]);
-  const { data, error, loading, reload } = useAsync(() => api.logs({ decision, q: qDeb, limit: 200 }), [decision, qDeb]);
-  const t = useTable(data ?? [], {
-    ts: (l) => l.ts, confidence: (l) => l.confidence, latency: (l) => l.latencyMs, risk: (l) => l.userRisk,
-  }, { defaultSort: 'ts', defaultDir: 'desc' });
+  const { data, error, loading, reload } = useAsync(
+    () => api.logsPage({ decision, q: qDeb, limit: PAGE, offset: (page - 1) * PAGE, sort: sort as SortKey, dir: dir === 'asc' ? 'asc' : 'desc' }),
+    [decision, qDeb, page, sort, dir],
+  );
   useRestoreListPos(LIST_KEY, !!data);
   const open = (id: string) => { rememberListPos(LIST_KEY); go(`/ops/logs/${encodeURIComponent(id)}`); };
+  const th = (key: SortKey, label: string, cls = '') => (
+    <SortTh key={key} active={sort === key} dir={dir === 'asc' ? 'asc' : 'desc'} className={cls} onClick={() => {
+      if (sort === key) setDir(dir === 'asc' ? 'desc' : 'asc'); else { setSort(key); setDir('desc'); }
+      setPageS('1');
+    }}>{label}</SortTh>
+  );
+  const total = data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE));
+  const clear = () => { setDecision(''); setQ(''); setPageS('1'); };
 
   return (
     <div className="page">
       <PageHead title="问答追溯" desc="每次回答的决策、置信度、合规命中与检索过程" actions={<button className="btn sm" onClick={reload} disabled={loading}><Icon name="refresh" size={14} /> 刷新</button>} />
       <div className="filters">
-        <SearchBox value={q} onChange={(v) => { setQ(v); t.resetPage(); }} placeholder="搜索问题或日志 ID" />
-        <select className="input" value={decision} onChange={(e) => { setDecision(e.target.value); t.resetPage(); }} aria-label="按决策筛选">
+        <SearchBox value={q} onChange={(v) => { setQ(v); setPageS('1'); }} placeholder="搜索问题或日志 ID" />
+        <select className="input" value={decision} onChange={(e) => { setDecision(e.target.value); setPageS('1'); }} aria-label="按决策筛选">
           <option value="">全部决策</option>
           {DECISIONS.map((d) => <option key={d} value={d}>{DECISION_LABEL[d]}</option>)}
         </select>
-        {(decision || q) && <button className="btn sm ghost" onClick={() => { setDecision(''); setQ(''); t.resetPage(); }}>清除筛选</button>}
-        {data && <span className="filter-n num">{data.length} 条</span>}
+        {(decision || q) && <button className="btn sm ghost" onClick={clear}>清除筛选</button>}
+        {data && <span className="filter-n num">共 {total} 条</span>}
       </div>
-      {error ? <ErrorBox msg={error} onRetry={reload} /> : loading && !data ? <TableSkeleton cols={8} /> : !data?.length ? (
+      {error ? <ErrorBox msg={error} onRetry={reload} /> : !data ? <TableSkeleton cols={8} /> : !data.items.length ? (
         decision || q
-          ? <Empty title="没有匹配的问答">换个关键词，或<button className="linkish" onClick={() => { setDecision(''); setQ(''); }}>清除筛选</button>。</Empty>
+          ? <Empty title="没有匹配的问答">换个关键词，或<button className="linkish" onClick={clear}>清除筛选</button>。</Empty>
+          : page > 1 ? <Empty title="这一页没有记录"><button className="linkish" onClick={() => setPageS('1')}>回到第一页</button></Empty>
           : <Empty title="还没有问答记录">在用户端提一个问题，这里会出现完整追溯。<br /><a href="#/app">打开用户端</a></Empty>
       ) : (
         <>
-          <div className="tbl-wrap">
+          <div className={`tbl-wrap${loading ? ' is-loading' : ''}`} aria-busy={loading}>
             <table className="tbl clickable">
-              <thead><tr>{t.th('ts', '时间')}<th>问题</th><th>决策</th>{t.th('confidence', '置信度', 'r')}{t.th('risk', '等级')}<th>模式</th><th>版本</th>{t.th('latency', '耗时', 'r')}<th>反馈</th></tr></thead>
+              <thead><tr>{th('ts', '时间')}<th>问题</th><th>决策</th>{th('confidence', '置信度', 'r')}{th('risk', '等级')}<th>模式</th><th>版本</th>{th('latency', '耗时', 'r')}<th>反馈</th></tr></thead>
               <tbody>
-                {t.view.map((l) => (
+                {data.items.map((l) => (
                   <tr key={l.id} onClick={() => open(l.id)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && open(l.id)}>
                     <td className="nowrap muted num">{fmtTime(l.ts)}</td>
                     <td className="q-cell">{l.question}</td>
@@ -65,7 +81,7 @@ export function LogsPage({ query: _q }: { query: URLSearchParams }) {
               </tbody>
             </table>
           </div>
-          <Pager page={t.page} pages={t.pages} total={t.total} size={t.size} onPage={(n) => { t.setPage(n); document.querySelector('.ops-main')?.scrollTo({ top: 0 }); }} />
+          <Pager page={page} pages={pages} total={total} size={PAGE} onPage={(n) => { setPageS(String(n)); document.querySelector('.ops-main')?.scrollTo({ top: 0 }); }} />
         </>
       )}
     </div>

@@ -8,7 +8,7 @@ const ROUTES: [RegExp, string[]][] = [
   [/^\/api\/alerts$/, ['GET']], [/^\/api\/alerts\/[^/]+\/ack$/, ['POST']],
   [/^\/api\/tickets$/, ['GET']], [/^\/api\/tickets\/[^/]+$/, ['POST']],
   [/^\/api\/kb\/docs$/, ['GET', 'POST']], [/^\/api\/kb\/docs\/[^/]+$/, ['GET']], [/^\/api\/kb\/publish$/, ['POST']],
-  [/^\/api\/kb\/rollback$/, ['POST']], [/^\/api\/kb\/releases$/, ['GET']], [/^\/api\/kb\/preview-chunks$/, ['POST']],
+  [/^\/api\/kb\/rollback$/, ['POST']], [/^\/api\/kb\/unpublish$/, ['POST']], [/^\/api\/kb\/releases$/, ['GET']], [/^\/api\/kb\/preview-chunks$/, ['POST']],
   [/^\/api\/eval\/run$/, ['POST']], [/^\/api\/admin\/seed$/, ['POST']],
 ];
 

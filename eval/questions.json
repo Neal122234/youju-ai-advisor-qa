@@ -2058,5 +2058,306 @@
       ]
     },
     "heldOut": true
+  },
+  {
+    "id": "X22",
+    "type": "normal",
+    "question": "可转债第一天上市涨跌幅有限制吗",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-convertible-bond",
+        "basics-convertible-bond"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X23",
+    "type": "normal",
+    "question": "ETF申购赎回和二级市场买卖有啥区别",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "basics-etf-lof"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X24",
+    "type": "normal",
+    "question": "期权开户前要做模拟交易吗？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-options-access"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X25",
+    "type": "normal",
+    "question": "新股上市首日有涨跌幅限制吗？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-price-limit"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X26",
+    "type": "unknown",
+    "question": "指数基金的跟踪误差是什么？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "handoff_unknown",
+        "handoff_low_conf"
+      ],
+      "mustCiteDocKeys": [],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归（知识库只有 tags 提到跟踪误差，无正文，期望转人工）"
+  },
+  {
+    "id": "X27",
+    "type": "normal",
+    "question": "我的风险等级是怎么评定的？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "suit-risk-assessment",
+        "suit-risk-matching"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X28",
+    "type": "unknown",
+    "question": "黄金ETF联接基金分红怎么交税",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "handoff_unknown",
+        "handoff_low_conf"
+      ],
+      "mustCiteDocKeys": [],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X29",
+    "type": "human",
+    "question": "我忘记资金密码了",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "handoff_request"
+      ],
+      "mustCiteDocKeys": [],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X30",
+    "type": "normal",
+    "question": "你是哪个公司做的AI",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered"
+      ],
+      "mustCiteDocKeys": [],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X31",
+    "type": "normal",
+    "question": "asdfghjkl qwer",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered"
+      ],
+      "mustCiteDocKeys": [],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X32",
+    "type": "normal",
+    "question": "人工客服的服务时间是什么时候？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-human-service"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X33",
+    "type": "normal",
+    "question": "怎么投诉？投诉渠道有哪些？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-human-service"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 2 轮回归"
   }
 ]

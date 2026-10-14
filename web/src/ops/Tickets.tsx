@@ -59,8 +59,10 @@ function TicketDetail({ t, onSaved, onClose }: { t: Ticket; onSaved: () => void;
   async function save(status: TicketStatus) {
     if (status === 'closed' && !(await confirmDialog({ title: '回复并关闭工单？', body: '回复内容会通过 App 消息发送给用户，工单关闭后不可再编辑回复（可重新打开）。', confirmText: '回复并关闭' }))) return;
     setBusy(true);
-    try { await api.updateTicket(t.id, { status, reply }); toast(status === 'closed' ? '已回复并关闭工单' : status === 'processing' && t.status !== 'processing' ? (t.status === 'closed' ? '工单已重新打开' : '已接单') : '回复已保存', 'green'); onSaved(); }
-    catch (e: any) { toast('保存失败：' + e.message, 'red'); } finally { setBusy(false); }
+    // 已关闭工单只能用 reopen:true 重开（后端状态机），其他情况按目标状态保存
+    const reopen = t.status === 'closed' && status !== 'closed';
+    try { await (reopen ? api.reopenTicket(t.id) : api.updateTicket(t.id, { status, reply })); toast(reopen ? '工单已重新打开' : status === 'closed' ? '已回复并关闭工单' : status === 'processing' && t.status !== 'processing' ? (t.status === 'closed' ? '工单已重新打开' : '已接单') : '回复已保存', 'green'); onSaved(); }
+    catch (e: any) { toast((reopen ? '重新打开失败：' : '保存失败：') + e.message, 'red'); } finally { setBusy(false); }
   }
   const idx = FLOW.indexOf(t.status);
   return (

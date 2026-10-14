@@ -30,7 +30,11 @@ export interface Gap {
   type: GapType; status: GapStatus; docKey: string | null; resolvedRelease: string | null;
   firstSeen: string; lastSeen: string; draftVersionId: string | null;
 }
-export interface GapDraftResult { docVersionId: string; docKey: string | null }
+/** 起草知识：后端只返回预填内容（docVersionId 为 null），运营保存时才建草稿 */
+export interface GapDraftResult {
+  docVersionId: string | null; docKey: string | null; gapId?: string;
+  title?: string; category?: string; productRisk?: ProductRisk | null; content?: string; existing?: boolean;
+}
 export interface GapVerifyResult {
   resolved: boolean; release: string;
   results: { question: string; decision: Decision; confidence: number; qaId: string | null }[];

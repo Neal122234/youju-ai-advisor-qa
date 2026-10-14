@@ -10,6 +10,8 @@ export interface ApiClient {
   chat(req: ChatRequest): Promise<ChatResponse>;
   feedback(qaId: string, helpful: boolean, note?: string): Promise<void>;
   logs(p?: { decision?: string; q?: string; limit?: number }): Promise<LogItem[]>;
+  /** 服务端分页：offset/limit + 排序，返回当前页与总数 */
+  logsPage(p: LogsQuery): Promise<{ items: LogItem[]; total: number }>;
   log(id: string): Promise<LogDetail>;
   dashboard(): Promise<Dashboard>;
   gaps(status?: string): Promise<Gap[]>;
@@ -18,17 +20,24 @@ export interface ApiClient {
   alerts(status?: string): Promise<Alert[]>;
   ackAlert(id: string): Promise<void>;
   tickets(): Promise<Ticket[]>;
-  updateTicket(id: string, body: { status: TicketStatus; reply?: string }): Promise<void>;
+  /** 已关闭工单重开需传 reopen:true（后端状态机不允许 closed → processing 直接改） */
+  updateTicket(id: string, body: { status?: TicketStatus; reply?: string; reopen?: boolean }): Promise<void>;
   docs(): Promise<KbDoc[]>;
   doc(docKey: string): Promise<DocDetail>;
   saveDoc(input: DocInput): Promise<DocVersion>;
   publish(versionIds: string[], note: string): Promise<Release>;
   rollback(docKey: string, version: number): Promise<Release>;
+  /** 下线文档：当前发布版本归档、块失效，生成不含该文档的新 release */
+  unpublish(docKey: string, note?: string): Promise<Release>;
+  /** 重开已关闭的工单（closed 只能通过 reopen 重开为 processing） */
+  reopenTicket(id: string, reply?: string): Promise<void>;
   releases(): Promise<Release[]>;
   previewChunks(content: string): Promise<PreviewChunk[]>;
   /** 线上实现按 8 题一批调用 /api/eval/run（offset/limit），onProgress 回报进度与累计结果 */
-  runEval(ids?: string[], onProgress?: (done: number, total: number, partial: EvalRun) => void): Promise<EvalRun>;
+  /** opts.persist 默认 false：评测问答不写入生产日志、不建工单/缺口/告警 */
+  runEval(ids?: string[], onProgress?: (done: number, total: number, partial: EvalRun) => void, opts?: { persist?: boolean }): Promise<EvalRun>;
 }
+export interface LogsQuery { decision?: string; q?: string; limit: number; offset: number; sort?: 'ts' | 'confidence' | 'latency' | 'risk'; dir?: 'asc' | 'desc' }
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public status = 0) { super(message); }
@@ -212,7 +221,7 @@ async function http<T = any>(path: string, init?: RequestInit & { timeoutMs?: nu
   } catch (err: any) {
     if (err?.name === 'AbortError') throw new ApiError('TIMEOUT', '请求超时');
     if (err instanceof ApiError) throw err;
-    throw new ApiError('NETWORK', '网络不可达：' + (err?.message ?? ''));
+    throw new ApiError('NETWORK', '网络连接失败，请检查网络后重试');
   } finally { clearTimeout(t); }
 }
 async function withRetry<T>(fn: () => Promise<T>, tries = 2): Promise<T> {
@@ -248,13 +257,24 @@ export const remoteApi: ApiClient = {
   },
   async feedback(qaId, helpful, note) { await http('/api/feedback', post({ qaId, helpful, note })); },
   async logs(p = {}) { return list(await http('/api/logs' + qs(p)), 'logs').map(norm.log); },
+  async logsPage(p) {
+    const r = await http('/api/logs' + qs(p));
+    const items = list(r, 'logs').map(norm.log);
+    // 旧接口没有 total：按"本页是否满页"推断还有没有下一页
+    const total = r?.total !== undefined ? num(r.total) : p.offset + items.length + (items.length === p.limit ? 1 : 0);
+    return { items, total };
+  },
   async log(id) { return norm.logDetail(await http('/api/logs/' + encodeURIComponent(id))); },
   async dashboard() { return norm.dashboard(await http('/api/dashboard')); },
   async gaps(status) { return list(await http('/api/gaps' + qs({ status })), 'gaps').map(norm.gap); },
   async gapAction(id, action) {
     const r = await http('/api/gaps/' + encodeURIComponent(id), post({ action }));
     if (action !== 'draft') return null;
-    return { docVersionId: str(g(r, 'docVersionId', 'versionId', 'id')), docKey: g(r, 'docKey') ?? null };
+    const vid = g(r, 'docVersionId', 'versionId');
+    return {
+      docVersionId: vid ? str(vid) : null, docKey: g(r, 'docKey') ?? null, gapId: g(r, 'gapId') ?? id,
+      title: g(r, 'title'), category: g(r, 'category'), productRisk: g(r, 'productRisk') ?? null, content: g(r, 'content'), existing: !!g(r, 'existing'),
+    };
   },
   async gapVerify(id) {
     const r = await http('/api/gaps/' + encodeURIComponent(id) + '/verify', post({}));
@@ -280,16 +300,18 @@ export const remoteApi: ApiClient = {
   async publish(versionIds, note) { const r = await http('/api/kb/publish', post({ versionIds, note })); return norm.release(r.release ?? r); },
   async rollback(docKey, version) { const r = await http('/api/kb/rollback', post({ docKey, version })); return norm.release(r.release ?? r); },
   async releases() { return list(await http('/api/kb/releases'), 'releases').map(norm.release); },
+  async unpublish(docKey, note) { const r = await http('/api/kb/unpublish', post({ docKey, note })); return norm.release(r.release ?? r); },
+  async reopenTicket(id, reply) { await http('/api/tickets/' + encodeURIComponent(id), post(reply === undefined ? { reopen: true } : { reopen: true, reply })); },
   async previewChunks(content) {
     const r = await http('/api/kb/preview-chunks', post({ content }));
     return list(r, 'chunks').map((c: AnyObj, i: number) => ({ ord: num(g(c, 'ord'), i), heading: str(g(c, 'heading')), text: str(g(c, 'text')) }));
   },
-  async runEval(ids, onProgress) {
+  async runEval(ids, onProgress, opts) {
     // 分批：线上单请求有子请求/CPU 限制，每批 8 题，失败的批次重试
     const BATCH = 8;
     const all: EvalItem[] = []; let kbRelease = ''; let total = ids?.length ?? 0; let offset: number | null = 0;
     while (offset !== null) {
-      const body: Record<string, unknown> = { offset, limit: BATCH }; if (ids?.length) body.ids = ids;
+      const body: Record<string, unknown> = { offset, limit: BATCH, persist: opts?.persist === true }; if (ids?.length) body.ids = ids;
       const raw: any = await withRetry(() => http('/api/eval/run', post(body, { timeoutMs: 180000 } as any)), 3);
       const part = norm.evalRun(raw);
       all.push(...part.results); kbRelease = part.kbRelease || kbRelease;
@@ -300,6 +322,16 @@ export const remoteApi: ApiClient = {
     return norm.evalRun({ results: all, kbRelease });
   },
 };
+
+/* ---------------- 后端新增接口（QA 第 2 轮；仅线上模式可用） ---------------- */
+/** 下线文档：当前发布版本归档、块失效，生成新 release（不含该文档）。返回新 release */
+export async function unpublishDoc(docKey: string, note?: string): Promise<Release> {
+  return api.unpublish(docKey, note); // 统一走 ApiClient（本地模式也可用）
+}
+/** 重开已关闭的工单（后端状态机要求 closed 只能通过 reopen 重开为 processing） */
+export async function reopenTicket(id: string, reply?: string): Promise<void> {
+  return api.reopenTicket(id, reply);
+}
 
 /* ---------------- 模式选择 ---------------- */
 export type ApiMode = 'remote' | 'local';
