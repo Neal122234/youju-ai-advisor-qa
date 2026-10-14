@@ -61,41 +61,48 @@ async function callModel(ai: AiBinding, model: string, messages: LlmMessage[], m
 }
 
 /* ================= Provider：SiliconFlow（OpenAI 兼容）+ Workers AI ================= */
-export type Provider = 'workers-ai' | 'siliconflow';
+/** siliconflow-lite：同一 SiliconFlow 账号下更快的 8B 模型，作为最后一道备用（与 siliconflow 共用余额熔断） */
+export type Provider = 'workers-ai' | 'siliconflow' | 'siliconflow-lite';
+export const SF_DEFAULT_LITE = 'Qwen/Qwen3-8B';
+/** 非最后一个通道的单次生成超时：主通道慢时尽早回退，把剩余预算留给备用通道 */
+export const PRIMARY_ATTEMPT_MS = 8_000;
 export const SF_BASE = 'https://api.siliconflow.cn/v1';
 export const SF_DEFAULT_CHAT = 'Qwen/Qwen3-30B-A3B-Instruct-2507';
 export const SF_DEFAULT_EMBED = 'BAAI/bge-m3';
 /** 意图分类默认与生成同用 30B-A3B Instruct：评测中 8B 有越界漏判（"有没有翻倍基"）与闲聊误判；投机并行后分类时延被生成掩盖，用 30B 不增加总时延。可用 SF_INTENT_MODEL 覆盖 */
 export const SF_DEFAULT_INTENT = SF_DEFAULT_CHAT;
 /** 默认主备顺序：SiliconFlow 为主、Workers AI 为备（可用 env PROVIDER_ORDER 覆盖） */
-export const DEFAULT_PROVIDER_ORDER: Provider[] = ['siliconflow', 'workers-ai'];
+export const DEFAULT_PROVIDER_ORDER: Provider[] = ['siliconflow', 'workers-ai', 'siliconflow-lite'];
 /** 额度/余额类错误后的熔断时长（本 isolate 内）：期间跳过该通道，不再先撞一次失败 */
 export const QUOTA_BREAKER_MS = 30 * 60_000;
 
-const state = { quotaUntil: { 'workers-ai': 0, siliconflow: 0 } as Record<Provider, number>, lastOk: { 'workers-ai': 0, siliconflow: 0 } as Record<Provider, number>, lastQuota: { 'workers-ai': 0, siliconflow: 0 } as Record<Provider, number>, sfTokens: 0 };
+const state = { quotaUntil: { 'workers-ai': 0, siliconflow: 0, 'siliconflow-lite': 0 } as Record<Provider, number>, lastOk: { 'workers-ai': 0, siliconflow: 0, 'siliconflow-lite': 0 } as Record<Provider, number>, lastQuota: { 'workers-ai': 0, siliconflow: 0, 'siliconflow-lite': 0 } as Record<Provider, number>, sfTokens: 0 };
 export function providerState() { return { quotaUntil: { ...state.quotaUntil }, lastOk: { ...state.lastOk }, lastQuota: { ...state.lastQuota }, sfTokens: state.sfTokens,
   /** 兼容旧字段 */ workersAiQuotaUntil: state.quotaUntil['workers-ai'] }; }
-export function resetProviderState() { for (const p of ['workers-ai', 'siliconflow'] as Provider[]) { state.quotaUntil[p] = 0; state.lastOk[p] = 0; state.lastQuota[p] = 0; } state.sfTokens = 0; }
+export function resetProviderState() { for (const p of ['workers-ai', 'siliconflow', 'siliconflow-lite'] as Provider[]) { state.quotaUntil[p] = 0; state.lastOk[p] = 0; state.lastQuota[p] = 0; } state.sfTokens = 0; }
 /** 额度/余额类错误：Workers AI 4006（每日免费额度）、SiliconFlow 402（余额不足）/ 429 配额等 */
 export function isQuotaError(e: unknown): boolean {
   const m = e instanceof Error ? e.message : String(e);
   return /\b4006\b|daily free allocation|neurons|quota exceeded|exceeded your (daily|monthly)|HTTP 402\b|insufficient (balance|quota)|余额不足|账户余额/i.test(m);
 }
-function trip(p: Provider, now = Date.now()) { state.quotaUntil[p] = now + QUOTA_BREAKER_MS; state.lastQuota[p] = now; }
-const tripped = (p: Provider, now = Date.now()) => state.quotaUntil[p] > now;
-const LABEL: Record<Provider, string> = { 'workers-ai': 'Workers AI', siliconflow: 'SiliconFlow' };
+/** 两个 SiliconFlow 通道共用账号余额：任一触发额度熔断，两者一起熔断 */
+const account = (p: Provider): Provider => (p === 'siliconflow-lite' ? 'siliconflow' : p);
+function trip(p: Provider, now = Date.now()) { const a = account(p); state.quotaUntil[a] = now + QUOTA_BREAKER_MS; state.lastQuota[a] = now; }
+const tripped = (p: Provider, now = Date.now()) => state.quotaUntil[account(p)] > now;
+const LABEL: Record<Provider, string> = { 'workers-ai': 'Workers AI', siliconflow: 'SiliconFlow', 'siliconflow-lite': 'SiliconFlow 8B' };
 
 export function sfConfigured(env: Env): boolean { return typeof env.SILICONFLOW_API_KEY === 'string' && env.SILICONFLOW_API_KEY.length > 10; }
 export function providerOrder(env: Env): Provider[] {
-  const raw = (env.PROVIDER_ORDER ?? '').split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter((x): x is Provider => x === 'siliconflow' || x === 'workers-ai');
+  const raw = (env.PROVIDER_ORDER ?? '').split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter((x): x is Provider => x === 'siliconflow' || x === 'workers-ai' || x === 'siliconflow-lite');
   const order = raw.length ? [...new Set(raw)] : DEFAULT_PROVIDER_ORDER;
   for (const p of DEFAULT_PROVIDER_ORDER) if (!order.includes(p)) order.push(p);
   return order;
 }
 const available = (env: Env, p: Provider) => (p === 'workers-ai' ? !!env.AI : sfConfigured(env));
+const isSf = (p: Provider) => p !== 'workers-ai';
 export function parseProvider(req: Request): Provider | null {
   const v = (req.headers.get('x-provider') ?? '').trim().toLowerCase();
-  return v === 'siliconflow' || v === 'workers-ai' ? v : null;
+  return v === 'siliconflow' || v === 'workers-ai' || v === 'siliconflow-lite' ? v : null;
 }
 /** 本次请求要尝试的通道链：x-provider 强制时只用它；否则按主备顺序，跳过未配置与熔断中的（全部熔断时仍按原顺序尝试） */
 function chain(env: Env, forced: Provider | null): { list: Provider[]; skipped: string[] } {
@@ -146,13 +153,15 @@ export function createLlm(env: Env, faults: Set<Fault>, budgetMs = LLM_TIMEOUT_M
     const deadline = Date.now() + budget;
     const maxTokens = o?.maxTokens ?? 700;
     const left = () => deadline - Date.now();
+    let attemptCap = budget;   // 当前这次尝试的超时上限（非最后通道 ≤ PRIMARY_ATTEMPT_MS）
+    const aLeft = () => Math.min(left(), attemptCap);
     const guard = async <T,>(label: string, fn: () => Promise<T>) => {
       calls++;
       if (left() <= 0) throw new TimeoutError('LLM', budget);
       if (o?.signal?.aborted) throw new Error('已取消');
       if (faults.has('llm')) throw new Error(`故障注入：${label} 不可用`);
-      if (faults.has('slow-llm')) await sleep(budget + 1000);
-      return withTimeout(fn(), left(), `LLM(${label})`);
+      if (faults.has('slow-llm')) await withTimeout(sleep(budget + 1000), aLeft(), `LLM(${label})`);
+      return withTimeout(fn(), aLeft(), `LLM(${label})`);
     };
     const viaWai = async (model: string) => {
       const ai = env.AI!;
@@ -166,14 +175,14 @@ export function createLlm(env: Env, faults: Set<Fault>, budgetMs = LLM_TIMEOUT_M
     const runWai = async () => {
       try { return await viaWai(MODEL_MAIN); }
       catch (e) {
-        if (isQuotaError(e) || o?.noFallback || e instanceof TimeoutError || left() < Math.min(3000, budget * 0.6)) throw e;
+        if (isQuotaError(e) || o?.noFallback || e instanceof TimeoutError || aLeft() < Math.min(3000, budget * 0.6)) throw e;
         return viaWai(MODEL_FALLBACK);
       }
     };
-    const runSf = async () => {
-      const model = o?.purpose === 'intent' ? (env.SF_INTENT_MODEL || SF_DEFAULT_INTENT) : (env.SF_CHAT_MODEL || SF_DEFAULT_CHAT);
+    const runSf = async (lite = false) => {
+      const model = lite ? (env.SF_LITE_MODEL || SF_DEFAULT_LITE) : o?.purpose === 'intent' ? (env.SF_INTENT_MODEL || SF_DEFAULT_INTENT) : (env.SF_CHAT_MODEL || SF_DEFAULT_CHAT);
       const text = await guard(`siliconflow/${model}`, async () => {
-        const r = await sfFetch(env, '/chat/completions', { model, messages, max_tokens: maxTokens, temperature: 0, stream: false, enable_thinking: false }, Math.max(500, left()), 'chat', o?.signal);
+        const r = await sfFetch(env, '/chat/completions', { model, messages, max_tokens: lite ? Math.min(maxTokens, 450) : maxTokens, temperature: 0, stream: false, enable_thinking: false }, Math.max(500, aLeft()), 'chat', o?.signal);   // 8B 兜底时限制输出长度，保证在剩余预算内完成
         return extractText(r);
       });
       if (!text.trim()) throw new Error(`siliconflow/${model} 返回空内容`);
@@ -189,7 +198,9 @@ export function createLlm(env: Env, faults: Set<Fault>, budgetMs = LLM_TIMEOUT_M
     let lastErr: unknown = null;
     for (let k = 0; k < list.length; k++) {
       const p = list[k];
-      try { return await (p === 'workers-ai' ? runWai() : runSf()); }
+      // 非最后一个通道：生成单次最多 PRIMARY_ATTEMPT_MS，且至少给后面留 2.5s
+      attemptCap = k < list.length - 1 && o?.purpose !== 'intent' ? Math.max(1500, Math.min(PRIMARY_ATTEMPT_MS, left() - 2500)) : budget;
+      try { return await (p === 'workers-ai' ? runWai() : runSf(p === 'siliconflow-lite')); }
       catch (e) {
         lastErr = e;
         const quota = isQuotaError(e);
@@ -197,10 +208,10 @@ export function createLlm(env: Env, faults: Set<Fault>, budgetMs = LLM_TIMEOUT_M
         console.warn(`[llm] ${p} failed`, e instanceof Error ? e.message.slice(0, 120) : String(e));
         const next = list[k + 1];
         if (!next) break;
-        if (faults.has('llm') || e instanceof TimeoutError || o?.signal?.aborted) break;
-        if (left() < (quota ? 1000 : 3000)) break;
+        if (faults.has('llm') || o?.signal?.aborted) break;
+        if (left() < (quota ? 1000 : 1500)) break;
         const code = (e instanceof Error ? e.message : String(e)).match(/\b(4006|402|429|5\d\d)\b/)?.[1];
-        notes.push(`${LABEL[p]}${quota ? ' 额度/余额不足' : ' 调用失败'}${code ? `（${code}）` : ''} → 切换 ${LABEL[next]}`);
+        notes.push(`${LABEL[p]}${quota ? ' 额度/余额不足' : e instanceof TimeoutError ? ` 超时（${Math.round(attemptCap / 1000)}s）` : ' 调用失败'}${code ? `（${code}）` : ''} → 切换 ${LABEL[next]}`);
       }
     }
     throw lastErr;
@@ -237,7 +248,8 @@ export async function embedTextsDetailed(env: Env, texts: string[], faults: Set<
     state.lastOk.siliconflow = Date.now();
     return out;
   };
-  const { list, skipped } = chain(env, forced);
+  const c0 = chain(env, forced === 'siliconflow-lite' ? 'siliconflow' : forced);
+  const list = c0.list.filter((p) => p !== 'siliconflow-lite'); const skipped = c0.skipped;
   if (!list.length) throw new Error(skipped[0] ?? 'AI binding 未配置');
   const notes: string[] = [...skipped];
   if (forced) notes.push(`x-provider 指定 ${LABEL[forced]}`);

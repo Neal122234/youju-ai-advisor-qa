@@ -11,6 +11,8 @@ export interface Env {
   SF_CHAT_MODEL?: string;
   SF_INTENT_MODEL?: string;
   SF_EMBED_MODEL?: string;
+  /** 第二备用（更快的小模型），默认 Qwen/Qwen3-8B */
+  SF_LITE_MODEL?: string;
   /** 主备顺序，逗号分隔，默认 siliconflow,workers-ai */
   PROVIDER_ORDER?: string;
 }

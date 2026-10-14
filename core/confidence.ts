@@ -1,6 +1,7 @@
 // 引用校验、落地性（grounding）、置信度与分档（SPEC §5 步骤 7–9）、适当性比对（步骤 10）。
 import type { Chunk, Decision, ProductRisk, RiskLevel } from './types';
 import { charBigramSet, financeTermsIn, normalizeText } from './tokenize';
+import { stockEntitiesIn } from './compliance';
 import { splitSentences } from './chunk';
 
 export const W = { retrieval: 0.35, coverage: 0.25, grounding: 0.25, citation: 0.15 } as const;
@@ -113,6 +114,8 @@ export interface SentenceEvidence {
   qualifierChange: string | null;
   /** 句子主体与依据原句主体不一致（句子讲 ETF，依据原句讲 LOF） */
   subjectMismatch: string | null;
+  /** 句中个股/公司实体在资料里不存在（"宁德时代在深交所上市"但资料没提宁德时代） */
+  missingEntities: string[];
   supported: boolean;
   /** 所引块不支撑、但其它块高度重合 → 应改引最佳块 */
   recite: boolean;
@@ -126,9 +129,9 @@ const GENERIC_TERMS = new Set(['风险', '收益', '投资者', '本金', '亏�
   '投资者教育', '理财', '证券账户', '资金账户', '交易所', '基金', '股票', '市值', '新股', '分红', '波动', '流动性', '杠杆', '手续费', '佣金', '密码', 'app']);
 // 量词只在修饰对象时计（"部分 ETF""所有投资者"），"超过部分可按 1 股递增"里的"部分"不算
 const QUANT_RE = /(部分|个别|某些|一些|多数|大部分|大多数|少数|全部|所有|一律|仅|只有)(?=\s*[\u4e00-\u9fa5a-z]{0,4}?(etf|lof|基金|品种|股票|证券|产品|券商|投资者|债券|公司|板块|情况|交易|个股|账户|客户|业务))/gi;
-const NEG_RE_RAW = /(不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|不设|不收|不受|不计|不参与|不支持|无需|无法|禁止|没有|未|勿|免征|免收)/;
+const NEG_RE_RAW = /(而非|并非|不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|不设|不收|不受|不计|不参与|不支持|无需|无法|禁止|没有|未|勿|免征|免收)/;
 /** "未转股/未成年/未满/未到期/未来…"里的"未""无"是名词性修饰，不是谓语否定，比较前先遮蔽 */
-const NEG_NOUN_MASK = /(未转股|未成年|未满|未到期|未了结|未缴款|未缴|未上市|未成交|未披露|未公开|未分配|未结清|未来|未交收|无风险|无论|不足|不限|不定期)/g;
+const NEG_NOUN_MASK = /(暂不征收|暂免征收|暂免|免征|不征收|免收|未转股|未成年|未满|未到期|未了结|未缴款|未缴|未上市|未成交|未披露|未公开|未分配|未结清|未来|未交收|无风险|无论|不足|不限|不定期)/g;
 const NEG_RE = { test: (t: string) => NEG_RE_RAW.test(t.replace(NEG_NOUN_MASK, '□')) };
 
 function keyTerms(sentence: string): string[] {
@@ -211,7 +214,9 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
     // 同一文档的其他检索块也算（"示例证券 App""R4"可能在同文档另一小节）
     const supDocs = new Set(support.map((n) => numbered[n - 1].docKey));
     const nearPool = pool + numbered.map((_, i) => (ov(i) >= 0.5 ? raw[i] : '')).join('');
-    const docPool = nearPool + numbered.map((c, i) => (supDocs.has(c.docKey) ? raw[i] : '')).join('');
+    // 非主体术语：在全部检索块里找（模型标错块号时不误杀；找到后由补/改引用指向正确块）
+    void supDocs;
+    const docPool = raw.join('');
     const missingTerms = keyTerms(plain).filter((w) => {
       // 产品/业务主体词（ETF、LOF…）只在依据块与高重合块里找；其他术语可扩展到同一文档的其他检索块
       const termPool = SUBJECT_WORDS.has(w) ? nearPool : docPool;
@@ -253,12 +258,15 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
     // 按分句核对主体：答案分句的主体（无则继承本句主体）与最相近依据分句的主体（无则继承其所在原句主体）不相交 → 不支持
     let subjectMismatch: string | null = null;
     const sentSubj = subjectsIn(plain);
-    for (const clause of plain.split(/[，,；;：:]/).filter((x) => x.replace(/[^\u3400-\u9fffA-Za-z0-9]/g, '').length >= 4)) {
-      const aSubj = subjectsIn(clause).length ? subjectsIn(clause) : sentSubj;
+    for (const clause of plain.split(/[，,；;：:]/).filter((x) => x.replace(/[^\u3400-\u9fffA-Za-z0-9]/g, '').length >= 7)) {   // 太短的分句（"为被动管理"）二元组太少，主体比对噪声大，跳过
+      // 分句自己点了另一个泛称主体（"而普通开放式基金…""股票…"）时不继承整句主体
+      const ownGeneric = /(普通开放式基金|开放式基金|普通基金|场外基金|公募基金|股票|个股|债券|它们|两者|二者)/.test(clause);
+      const aSubj = subjectsIn(clause).length ? subjectsIn(clause) : ownGeneric ? [] : sentSubj;
       if (!aSubj.length) continue;
       const cb = charBigramSet(clause);
       // 候选：依据块 + 与本句高度重合的其他检索块（模型可能引错块，原文在别的块里）
-      const cand = [...new Set([...support, ...numbered.map((_, i) => (ov(i) >= 0.5 ? i + 1 : 0)).filter(Boolean)])];
+      // 在全部检索块的全部分句里找支持句（R3-1 后过严：只比最相近分句会误杀 "ETF 和普通开放式基金的区别"）
+      const cand = numbered.map((_, i) => i + 1);
       const matches: { subj: string[]; o: number }[] = [];
       for (const n of cand) for (const ss of srcClauses[n - 1]) {
         let k = 0; for (const b of cb) if (ss.b.has(b)) k++;
@@ -275,8 +283,11 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
     const nums = numericFacts(s);
     const numericAnchored = nums.length > 0 && nums.every((x) => pool.includes(normNum(x)));
     const threshold = numericAnchored ? SENT_SUPPORT_NUMERIC : SENT_SUPPORT;
-    const supported = (overlap >= threshold || recite) && !missingNumbers.length && !missingTerms.length && !qualifierChange && !subjectMismatch;
-    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, missingTerms, qualifierChange, subjectMismatch, recite, supported });
+    // 个股/公司实体必须出现在检索资料中，否则字面重合再高也不支持（防止"XX 在深圳证券交易所上市"靠规则原文蒙混）
+    const allRaw = raw.join('');
+    const missingEntities = stockEntitiesIn(plain).filter((e) => !allRaw.includes(normNum(e)));
+    const supported = !missingEntities.length && (overlap >= threshold || recite) && !missingNumbers.length && !missingTerms.length && !qualifierChange && !subjectMismatch;
+    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, missingTerms, qualifierChange, subjectMismatch, missingEntities, recite, supported });
   }
   return out;
 }

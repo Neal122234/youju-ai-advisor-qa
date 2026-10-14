@@ -33,7 +33,9 @@ const CORP_SUFFIX_RE = /[一-龥]{2,4}(股份|集团|控股|药业|制药|酒业
 // 6 位证券代码（排除金额/数量：后接 元/万/股/份/人/年 等）
 const CODE_RE = /(?<![\d.])(?:sh|sz|bj)?([0-9]{6})(?:\.(?:sh|sz|bj))?(?![\d.]|\s*(元|块|万|千|百|股|份|人|年|月|日|号|%|个|次|笔|手|分))/;
 const SECRET_CTX = /(密码|验证码|手机|电话|身份证|卡号|银行卡|账号|证件号)/;
-const ANAPHORA_RE = /(某只票|某只股票?|某个股票|某股|这只|那只|这支|那支|该股|(?<!什么是)个股(?!期权)|这个股|这股|这票|这个票|那个票|这家公司|这只基金|该基金|这个基金|这个标的|该标的|(手里|手上|我)的?(股票|股|基金|票|持仓|仓位)|我持有的|我买的|我拿的|自选股|某只股|龙头股)/;
+/** 指代用户自身持仓的短语：不是个股实体（不能据此判"个股+涨跌=预测"），但叠加买卖/止损等建议诉求时仍越界 */
+const HOLDING_RE = /(我买的|我持有的|我拿的|我手里的?|我手上的?|手里的|手上的|我的(基金|股票|持仓|仓位|票|股))/;
+const ANAPHORA_RE = /(某只票|某只股票?|某个股票|某股|这只|那只|这支|那支|该股|(?<!什么是)个股(?!期权)|这个股|这股|这票|这个票|那个票|这家公司|这只基金|该基金|这个基金|这个标的|该标的|自选股|某只股|龙头股)/;
 const SECTOR_RE = /((银行|券商|保险|白酒|医药|医疗|创新药|新能源车?|光伏|锂电|储能|风电|芯片|半导体|军工|地产|房地产|消费|科技|ai|人工智能|算力|机器人|汽车|煤炭|石油|有色|稀土|黄金|白银|低空经济|游戏|传媒|电力|基建|中字头|高股息|红利|小盘|大盘|蓝筹|题材|概念)(股|板块|概念股|赛道|etf)|(黄金|白银|白酒|光伏|锂电|半导体|芯片|军工|算力|稀土|创新药))/;
 const MARKET_RE = /(大盘|a股|沪指|上证(指数|综指)?|深证成指|深成指|创业板指|科创50|沪深300|中证500|中证1000|恒生指数|恒指|纳斯达克|纳指|道琼斯|标普|股市|市场|行情|指数|港股|美股|牛市|熊市|科创板|创业板|北交所|主板)/;
 const GENERIC_RE = /(股票|基金|债券|国债|逆回购|可转债|科创板|创业板|北交所|港股|美股|新股|etf|lof|理财产品|理财|期权|期货|st股?|权证|b股|a股|r[1-5]|产品)/;
@@ -51,6 +53,31 @@ const SLANG_RE = /(抄底|上车|下车|梭哈|all ?in|满仓|割肉|追高|冲�
 const QUESTION_TAIL = /(吗|么|不|呢|吧|没|\?|？)?$/;
 const ADVICE_RE = /(该不该|应不应该|要不要|能不能|可不可以|适不适合|值不值得|是否(应该|可以|适合)?|应该|可以|适合|值得|还能|能|该|要|敢|建议)(现在|今天|马上|立刻|继续|再|全部|一次性|赶紧|先)?(买入|卖出|买|卖|加仓|减仓|补仓|清仓|满仓|半仓|建仓|抄底|上车|下车|梭哈|割肉|止损|止盈|持有|拿着|卖掉|进场|入场|离场|追高|追涨|抛|冲|跑|入手|定投|all ?in)/;
 const PROCEDURAL_RE = /(最少|最低|至少|多少股|一手|手续费|佣金|印花税|怎么买|如何买|在哪买|哪里买|在哪里买|流程|步骤|交易规则|规则|交易时间|几点|开通|权限|怎么交易|如何交易)/;
+
+/** 行情查询：问已发生的价格事实（"腾讯股价今天多少""茅台昨天收盘多少"）——不是越界，但本助手不提供行情数据 */
+// 强行情词：单独出现即是问行情（"昨天股价多少"）；弱行情词（价格/市值/成交量…）需同时有时间词
+const MARKET_FACT_STRONG = /(收了多少点|收在多少点|点位是多少|股价|收盘价|开盘价|收盘多少|开盘多少|收在多少|现价|最新价|报价|多少钱一股|几块钱一股|报几块|涨了多少|跌了多少|涨了几|跌了几|涨停了|跌停了|收涨|收跌)/;
+const MARKET_FACT_WEAK = /(价格|价位|市值|成交量|成交额|换手率|涨幅|跌幅|涨了吗|跌了吗)/;
+const MARKET_TIME = /(今天|昨天|前天|现在|刚才|刚刚|最近|目前|当前|今日|昨日|这会儿|此刻|上周|本周|这周|上个月|今年以来)/;
+const MARKET_EXCLUDE = /(涨跌幅|涨跌停|首日|第一天|上市|新股|前5|前五|打新|申购|买|卖|会涨|会跌|还能|能涨|能跌|将|上车|目标价|明天|后天|下周|下个月|未来|将来|预测|预计|后市|走势|抄底|建议|值得|该不该|要不要|能不能|可以|限制|规则|制度|怎么|如何|为什么|为何|原因|影响|是什么|什么意思|含义|定义|需要|条件|门槛)/;
+/** 问已发生涨跌的原因（"腾讯今天为什么跌了"）：过去时 + 涨/跌了 + 没有未来时点——不是预测 */
+const PAST_MOVE = /(今天|昨天|前天|刚才|刚刚|最近|上周|这周|本周|这几天|近期)[^。？?！!]{0,10}(涨|跌|大涨|大跌|暴涨|暴跌|拉升|跳水)了/;
+const FUTURE_MARK = /(明天|后天|下周|下个月|将|还会|会不会|能不能|还能|接下来|未来|以后|后面|目标)/;
+export function isPastMoveQuery(s: string): boolean {
+  const t = normalizeForRules(s);
+  return PAST_MOVE.test(t) && !FUTURE_MARK.test(t) && !/(买|卖|抄底|上车|加仓|减仓|该不该|要不要)/.test(t);
+}
+/** 证券基本信息（代码、全称、上市交易所/时间）：不越界，也不是行情；本助手不提供个股资料 */
+const SECURITY_INFO = /(股票代码|证券代码|基金代码|代码是多少|代码多少|全称是|简称是|在哪(个|家)?(交易所|证券交易所)?上市|哪个交易所(上市)?|上市地点|什么时候上市|哪年上市|上市时间)/;
+export function isSecurityInfoQuery(s: string): boolean {
+  const t = normalizeForRules(s);
+  return SECURITY_INFO.test(t) && !/(买|卖|会涨|会跌|还能|能涨|上车|抄底|建议|值得|规则|条件|门槛|流程|怎么开|如何开)/.test(t);
+}
+export function isMarketDataQuery(s: string): boolean {
+  const t = normalizeForRules(s);
+  if (isPastMoveQuery(t)) return true;
+  return (MARKET_FACT_STRONG.test(t) || (MARKET_FACT_WEAK.test(t) && MARKET_TIME.test(t))) && !MARKET_EXCLUDE.test(t);
+}
 
 /** 交易规则类问法（T+1、到账时间），不是买卖建议 */
 const RULE_Q = /((当天|今天|当日)买(入)?的.{0,6}(当天|今天|当日|明天)?(能|可以|能不能)卖|t\+[01n]|什么时候(能|可以)?(卖|取|到账|转出)|(规则|限制|制度)(是|有))/;
@@ -108,7 +135,7 @@ const PII_CARD = /(?<!\d)\d{16,19}(?!\d)/;
 /** 用户在对话里发出了自己的密码/验证码 */
 const PII_SECRET = /((交易|资金|登录|支付)?密码(是|为|:)?\S*\d{4,}|密码(是|为|:)[^，。,；;！!？?]{3,}|验证码(是|为|:)?\d{4,})/;
 /** 本人账户事务（需核实身份，转人工）："我的银行卡绑定失败""我开户审核到哪一步""账户被锁" */
-const SELF_ACCOUNT = /((忘记|忘了|想不起|记不得|不记得)了?(我的)?(交易|资金|登录|支付)?密码|(交易|资金|登录|支付)?密码(忘记|忘了|想不起|记不得|输错|错了|被锁)|帮我(把|给我)?.{0,6}(开了|开通|办了|办理|激活|解锁|销户|转户)|(我的?|本人|我名下的?)?.{0,12}(银行卡|卡|账户|账号|三方存管|存管|开户|审核|密码|资金).{0,10}(绑定失败|绑不上|失败|怎么办(?!理)|进度|到哪|哪一步|异常|被锁|锁了|锁定|冻结|解锁|解冻|重置|找回|忘了|忘记|扣款|没到账|不到账))/;
+const SELF_ACCOUNT = /((修改|更换|更改|换绑|改|变更)(一下)?(绑定的?|预留的?|我的)?(手机号|手机号码|银行卡|邮箱|联系地址|地址|密码)|(忘记|忘了|想不起|记不得|不记得)了?(我的)?(交易|资金|登录|支付)?密码|(交易|资金|登录|支付)?密码(忘记|忘了|想不起|记不得|输错|错了|被锁)|帮我(把|给我)?.{0,6}(开了|开通|办了|办理|激活|解锁|销户|转户)|(我的?|本人|我名下的?)?.{0,12}(银行卡|卡|账户|账号|三方存管|存管|开户|审核|密码|资金).{0,10}(绑定失败|绑不上|失败|怎么办(?!理)|进度|到哪|哪一步|异常|被锁|锁了|锁定|冻结|解锁|解冻|重置|找回|忘了|忘记|扣款|没到账|不到账))/;
 /** 用号码指代他人（"手机号138…的人持有什么"） */
 const PRIVACY_BY_NUMBER = /(手机号?|电话|身份证号?|卡号|账号)\d*\S{0,6}的(人|用户|客户|账户|主人|机主).{0,10}(持有|持仓|买了|信息|是谁|账户|资产|余额|开户)/;
 const INJECTION: RegExp[] = [
@@ -169,6 +196,10 @@ export interface ComplianceAnalysis {
   notes: string[];
   /** 反诈/识别类问法（怎么判断是不是骗局） */
   fraudEdu: boolean;
+  /** 行情查询（问已发生的价格事实，非越界） */
+  marketData: boolean;
+  /** 证券基本信息（代码/全称/上市交易所） */
+  securityInfo: boolean;
   /** 用户发送了本人敏感信息（身份证/卡号/手机号/密码） */
   selfPii: boolean;
   handoffReason: string;
@@ -180,6 +211,17 @@ export const isViolation = (c: ComplianceCategory) => VIOLATION_CATS.includes(c)
 function firstMatch(res: RegExp[], s: string): string | null {
   for (const r of res) { const m = s.match(r); if (m) return m[0]; }
   return null;
+}
+
+/** 文本中的个股/公司实体（名称、6 位代码、美股代码、"XX股份/集团/控股"），不含指代词与板块 */
+export function stockEntitiesIn(text: string): string[] {
+  const s = normalizeForRules(text);
+  const out: string[] = [];
+  const m1 = s.match(new RegExp(NAME_RE.source, 'g')); if (m1) out.push(...m1);
+  const m2 = SECRET_CTX.test(s) ? null : s.match(CODE_RE); if (m2) out.push(m2[1]);
+  const m3 = s.match(US_TICKERS); if (m3) out.push(m3[0]);
+  const m4 = s.match(CORP_SUFFIX_RE); if (m4 && !/示例/.test(m4[0])) out.push(m4[0]);
+  return [...new Set(out)];
 }
 
 function findEntities(s: string): { specific: string[]; market: string[] } {
@@ -241,7 +283,9 @@ function analyzeClause(raw: string, carry: string[]): ClauseAnalysis {
 
   // —— 收益承诺
   const rs = s.match(RETURN_STRONG);
-  if (rs && !edu) add(hit('return_promise', 'high', rs[0]));
+  // "打新稳赚吗""逆回购会亏吗"：问某类产品/行为的属性（是非问句、无索要/承诺语气）→ 教育
+  const attrQ = !!rs && /(稳赚|稳赚不赔|保本|会亏|不会亏|无风险|零风险)(的)?(吗|么|嘛|不|没)[？?]?$/.test(s) && !/(有没有|推荐|哪|怎样才能|怎么才能|如何才能|保证|承诺|给我|帮我|我想|想要|你们)/.test(s);
+  if (rs && !edu && !attrQ) add(hit('return_promise', 'high', rs[0]));
   else if (!edu) {
     const rsoft = s.match(RETURN_SOFT);
     if (rsoft && REQUEST_FRAME.test(s)) add(hit('return_promise', 'medium', rsoft[0]));
@@ -250,26 +294,32 @@ function analyzeClause(raw: string, carry: string[]): ClauseAnalysis {
 
   // —— 荐股：显式请求
   const se = firstMatch(STOCK_EXPLICIT, s);
-  if (se && !(edu && !ownSpecific.length)) add(hit('stock_pick', 'high', se));
+  // "挑基金一般看哪些指标"：挑/选 + 方法词 → 问方法（教育），不是要推荐
+  const methodQ = /(看哪些|看什么|怎么(挑|选|看)|如何(挑|选|看)|指标|方法|注意事项|标准|原则|技巧|要点|考虑哪些)/.test(s);
+  if (se && !(edu && !ownSpecific.length) && !(methodQ && !ownSpecific.length)) add(hit('stock_pick', 'high', se));
 
   // —— 荐股/预测：个股实体组合
   if (ent) {
     const tv = s.match(TRADE_RE); const ev = s.match(EVAL_RE);
     const pv2 = s.match(PRED_STRONG) ?? s.match(PRED_WEAK);
     const adv = s.match(ADVICE_RE);
-    const procedural = PROCEDURAL_RE.test(s) && !ev && !pv2 && !adv && !TIME_RE.test(s) && !SLANG_RE.test(s);
-    if (pv2) add(hit('price_prediction', 'high', `${ent}…${pv2[0]}`));
+    // 数量/流程词（"最少能买多少股"）或渠道/权限词（"港股通能买腾讯吗""没开通权限能买吗"）在前：问规则，不是买卖建议
+    const quantity = /(最少|至少|最多|多少股|几股|几手|一手|多少手|整数倍)/.test(s);
+    const channel = /(港股通|沪股通|深股通|科创板|创业板|北交所|权限|普通账户|信用账户|没开通|开通了?|融资融券|两融)[^，,。？?]{0,4}(能|可以|能不能|可不可以)(买|交易|卖)/.test(s);
+    const procedural = (PROCEDURAL_RE.test(s) || quantity || channel) && !ev && !pv2 && (!adv || quantity || channel) && !TIME_RE.test(s) && !SLANG_RE.test(s);
+    // 问已发生的行情事实（"今天涨了多少"）不是预测
+    if (pv2 && !isMarketDataQuery(s)) add(hit('price_prediction', 'high', `${ent}…${pv2[0]}`));
     if ((tv || ev || adv) && !procedural) add(hit('stock_pick', 'high', `${ent}…${(adv ?? tv ?? ev)![0]}`));
   }
 
   // —— 预测：大盘/指数/板块
-  if (!hits.some((h) => h.category === 'price_prediction') && market.length && !edu) {
+  if (!hits.some((h) => h.category === 'price_prediction') && market.length && !edu && !isMarketDataQuery(s)) {
     const fp = s.match(FUT_PRED) ?? s.match(PRED_STRONG);
     const tw = TIME_RE.test(s) && s.match(PRED_WEAK);
     if (fp || tw) add(hit('price_prediction', 'high', `${market[0]}…${(fp ?? tw as RegExpMatchArray)[0]}`));
   }
   // —— 预测：无实体显式
-  if (!hits.some((h) => h.category === 'price_prediction') && !edu) {
+  if (!hits.some((h) => h.category === 'price_prediction') && !edu && !isMarketDataQuery(s)) {
     const pe = firstMatch(PRED_EXPLICIT, s);
     const fp = s.match(FUT_PRED);
     if (pe) add(hit('price_prediction', 'high', pe));
@@ -283,7 +333,7 @@ function analyzeClause(raw: string, carry: string[]): ClauseAnalysis {
     if (adv) {
       const tail = new RegExp(adv[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(吗|么|不|呢|吧|没|\\?|？)?$').test(s);
       const timing = TIME_RE.test(s); const cond = PRICE_COND.test(s); const slang = SLANG_RE.test(s);
-      const personal = PERSONAL_RE.test(s) && !generic;
+      const personal = (PERSONAL_RE.test(s) && !generic) || HOLDING_RE.test(s);
       if (timing || cond || slang || personal || (tail && !generic)) add(hit('stock_pick', 'high', adv[0]));
     }
     if (!hits.some((h) => h.category === 'stock_pick')) {
@@ -359,6 +409,8 @@ export function analyzeInput(question: string): ComplianceAnalysis {
   for (const h of hits) h.matched = maskPII(h.matched, true).replace(/(?<!\d)\d{6}(?!\d)/g, (m) => (SECRET_CTX.test(s) ? '******' : m));
   return {
     hits, violations, injection, complaint, verdict, clauses, entities, notes, fraudEdu, selfPii,
+    marketData: verdict === 'clean' && !violations.length && !injection && !complaint && isMarketDataQuery(s),
+    securityInfo: verdict === 'clean' && !violations.length && !injection && !complaint && isSecurityInfoQuery(s),
     handoffReason: complaint ? '用户要求人工服务或投诉' : selfAccount ? '本人账户事务需核实身份' : '',
     compliantText: insiderEdu && !compliant.length ? '如何识别非法荐股群和虚假内幕消息、重组消息'
       : productEdu && !compliant.length ? '如何根据产品风险等级与自身风险承受能力选择理财产品，常见基金类型的风险等级'

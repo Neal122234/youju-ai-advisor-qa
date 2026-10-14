@@ -363,12 +363,13 @@ describe('第二层 LLM 意图分类', () => {
   });
   it('检索与分类并行：总时延≈max 而非和', async () => {
     const slow = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const ad = makeAdapters({ llm: async (m: any) => { if (m[0].content.includes('意图分类器')) { await slow(80); return '{"category":"education","scope":"whole","reason":"x"}'; } return echoLlm([])(m); } });
+    const ad = makeAdapters({ llm: async (m: any) => { if (m[0].content.includes('意图分类器')) { await slow(250); return '{"category":"education","scope":"whole","reason":"x"}'; } return echoLlm([])(m); } });
     const base = ad.retrieve;
-    ad.retrieve = async (q: string) => { await slow(80); return base(q); };
+    ad.retrieve = async (q: string) => { await slow(250); return base(q); };
     const t = Date.now();
     await runPipeline(req('科创板开通权限需要什么条件'), ad);
-    expect(Date.now() - t).toBeLessThan(150);
+    // 串行至少 500ms；并行应明显小于（留出负载抖动余量）
+    expect(Date.now() - t).toBeLessThan(450);
   });
   it('parseIntent 宽容解析与非法类别', async () => {
     const { parseIntent } = await import('../core/intent');

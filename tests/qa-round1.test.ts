@@ -329,3 +329,63 @@ describe('否定检测：名词性的"未""无"不算否定翻转', () => {
     expect(e.supported).toBe(true);
   });
 });
+describe('行情查询 market_data', () => {
+  for (const q of ['昨天股价多少', '腾讯股价今天多少', '茅台昨天收盘多少']) it(`${q} → answered 行情引导，无告警/工单`, async () => {
+    let called = false;
+    const r = await runPipeline(req(q), makeAdapters({ llm: async () => { called = true; return ''; } }));
+    expect(r.decision).toBe('answered');
+    expect(r.answer).toContain('行情页');
+    expect(r.compliance).toEqual([]);
+    expect(r.handoff).toBeNull();
+    expect(r.checks.some((c) => c.name === 'market_data')).toBe(true);
+    expect(called).toBe(false);
+  });
+  it('LLM 判 market_data 也走引导（规则未识别的问法）', async () => {
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"market_data","scope":"whole","reason":"查询行情"}' : echoLlm([])(m));
+    const r = await runPipeline(req('宁德时代这会儿报几块'), makeAdapters({ llm }));
+    expect(r.decision).toBe('answered');
+    expect(r.answer).toContain('行情页');
+    expect(r.compliance.filter((h) => h.category !== 'complaint_human')).toEqual([]);
+  });
+  it('isMarketDataQuery 正反例', async () => {
+    const { isMarketDataQuery } = await import('../core/compliance');
+    for (const q of ['腾讯股价今天多少', '昨天收盘价多少', '茅台现在多少钱一股']) expect(isMarketDataQuery(q)).toBe(true);
+    for (const q of ['茅台还能买吗', '腾讯明天会涨吗', '科创板涨跌幅限制是多少', '收盘价是什么意思', '腾讯今天跌了5%还能抄底吗']) expect(isMarketDataQuery(q)).toBe(false);
+  });
+});
+describe('误判专项：证据核验', () => {
+  it('#3 句中个股实体不在资料里 → 不支持（不能靠规则原文字面重合蒙混）', () => {
+    const c = chunkDocument('---\ndoc_key: ex\ntitle: 交易所\n---\n## 交易所\n创业板股票在深圳证券交易所上市交易，科创板股票在上海证券交易所上市交易。\n');
+    const [e] = sentenceEvidence('宁德时代在深圳证券交易所上市交易[1]。', c);
+    expect(e.supported).toBe(false);
+    expect(e.missingEntities).toContain('宁德时代');
+  });
+  it('#66 术语在其他检索块里也算；"暂免征收"不算否定翻转', () => {
+    const a = chunkDocument('---\ndoc_key: f\ntitle: 费用\n---\n## 印花税\n卖出股票按成交金额的 0.05% 单边征收印花税，买入不收。\n');
+    const b = chunkDocument('---\ndoc_key: d\ntitle: 红利税\n---\n## 红利税\n持股期限超过 1 年的，股息红利所得暂免征收个人所得税。\n');
+    const ev = sentenceEvidence('卖出股票按成交金额的 0.05% 单边征收印花税[2]。持股超过 1 年的股息红利所得免征个人所得税[2]。', [...b, ...a]);
+    expect(ev[0].supported).toBe(true);
+    expect(ev[1].qualifierChange).toBeNull();
+  });
+  it('#4/#3 证券基本信息 → 引导到 App 搜索，不凭空作答', async () => {
+    const r = await runPipeline(req('宁德时代在哪个交易所上市'), makeAdapters({ llm: echoLlm([]) }));
+    expect(r.decision).toBe('answered');
+    expect(r.answer).toContain('搜索');
+    expect(r.answer).not.toContain('深圳证券交易所');
+  });
+  it('#56 反诈语气 + LLM 判 return_promise → 按教育作答', async () => {
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"return_promise","scope":"whole","reason":"打听稳赚"}' : echoLlm([])(m));
+    const r = await runPipeline(req('有人说跟着他操作稳赚不赔，这可信吗'), makeAdapters({ llm }));
+    expect(r.decision).not.toBe('refused');
+  });
+});
+describe('资料外个股断言：分句级剔除', () => {
+  it('"茅台是主板股票，买入申报为100股整数倍" → 去掉茅台分句、保留规则', async () => {
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"education","scope":"whole","reason":"x"}'
+      : '{"answer":"贵州茅台是科创板股票，科创板股票单笔申报数量不得少于 200 股[1]。","used":[1],"covered":true}');
+    const r = await runPipeline(req('茅台在科创板最少能买多少股', 'C4'), makeAdapters({ llm }));
+    expect(r.answer).not.toContain('茅台');
+    expect(r.answer).toContain('200 股');
+    expect(r.decision).toMatch(/answered/);
+  });
+});

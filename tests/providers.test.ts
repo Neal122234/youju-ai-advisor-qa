@@ -148,13 +148,44 @@ describe('默认主备顺序：SiliconFlow 为主、Workers AI 为备', () => {
   });
   it('PROVIDER_ORDER 解析', async () => {
     const { providerOrder } = await import('../functions/_lib/ai');
-    expect(providerOrder({ DB: {} as any })).toEqual(['siliconflow', 'workers-ai']);
-    expect(providerOrder({ DB: {} as any, PROVIDER_ORDER: 'workers-ai' })).toEqual(['workers-ai', 'siliconflow']);
+    expect(providerOrder({ DB: {} as any })).toEqual(['siliconflow', 'workers-ai', 'siliconflow-lite']);
+    expect(providerOrder({ DB: {} as any, PROVIDER_ORDER: 'workers-ai' })).toEqual(['workers-ai', 'siliconflow', 'siliconflow-lite']);
   });
   it('embedding 默认走 SiliconFlow；SF 失败切 Workers AI', async () => {
     stubFetch(() => ({ status: 500, json: {} }));
     const r = await embedTextsDetailed({ DB: {} as any, AI: { run: async (_m: string, i: any) => ({ data: i.text.map(() => [1]) }) }, SILICONFLOW_API_KEY: KEY }, ['a']);
     expect(r.provider).toBe('workers-ai');
     expect(r.note).toContain('切换 Workers AI');
+  });
+});
+
+describe('主通道超时 → 回退 8B', () => {
+  it('SiliconFlow 30B 超过单次上限 → Workers AI 熔断中 → SiliconFlow 8B 成功；总时长在预算内', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+      const body = JSON.parse(init.body); fetchCalls.push({ url, body });
+      if (body.model === 'Qwen/Qwen3-30B-A3B-Instruct-2507') {
+        await new Promise((res, rej) => { const t = setTimeout(res, 5000); init.signal?.addEventListener('abort', () => { clearTimeout(t); const e = new Error('aborted'); (e as any).name = 'AbortError'; rej(e); }); });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"answer":"ok[1]","used":[1],"covered":true}' } }] }), { status: 200 });
+    }));
+    const ai = { run: async () => { throw new Error('4006: you have used up your daily free allocation'); } };
+    const env: any = { DB: {}, AI: ai, SILICONFLOW_API_KEY: KEY };
+    // 先让 Workers AI 进入熔断
+    await createLlm({ ...env, PROVIDER_ORDER: 'workers-ai,siliconflow-lite' }, new Set()).llm!(msgs);
+    fetchCalls = [];
+    const h = createLlm(env, new Set(), 4500);   // 总预算 4.5s：30B 单次上限 = min(8s, 4.5-2.5) = 2s，超时后用剩余 2.5s 回退 8B
+    const t = Date.now();
+    const out = await h.llm!(msgs, { purpose: 'generate' });
+    expect(out).toContain('ok');
+    expect(Date.now() - t).toBeLessThan(4500);
+    expect(h.modelName('generate')).toBe('siliconflow/Qwen/Qwen3-8B');
+    expect(h.notes().join()).toMatch(/SiliconFlow 超时.*→ 切换 SiliconFlow 8B/);
+    expect(h.notes().join()).toContain('Workers AI 额度熔断中');
+    expect(fetchCalls.map((c) => c.body.model)).toEqual(['Qwen/Qwen3-30B-A3B-Instruct-2507', 'Qwen/Qwen3-8B']);
+  });
+  it('embedding 链不使用 8B 通道', async () => {
+    stubFetch(() => ({ json: { data: [{ index: 0, embedding: [1] }] } }));
+    const r = await embedTextsDetailed({ DB: {} as any, SILICONFLOW_API_KEY: KEY }, ['a']);
+    expect(r.provider).toBe('siliconflow');
   });
 });

@@ -81,10 +81,10 @@ seed 时对每个待向量化的块，先查预计算表：块 id 相同，且�
 
 ## 模型通道（SiliconFlow 为主、Workers AI 为备）
 
-默认主备顺序为 `siliconflow,workers-ai`，可用环境变量 `PROVIDER_ORDER` 调整。生产以 SiliconFlow（`https://api.siliconflow.cn/v1`，OpenAI 兼容）为主：评审实际走的通道，要和我们完整评测时用的通道一致。chat、意图分类和 embedding 都按这个顺序依次尝试：
+默认顺序为 `siliconflow,workers-ai,siliconflow-lite`（`siliconflow-lite` = 同一 SiliconFlow 账号下的 `Qwen/Qwen3-8B`，可用 `SF_LITE_MODEL` 改），可用环境变量 `PROVIDER_ORDER` 调整。生产以 SiliconFlow（`https://api.siliconflow.cn/v1`，OpenAI 兼容）为主：评审实际走的通道，要和我们完整评测时用的通道一致。chat、意图分类和 embedding 都按这个顺序依次尝试：
 
 - 额度或余额类错误（SiliconFlow 402 余额不足 / 429 配额，Workers AI 4006 每日免费额度耗尽）：该通道在本 isolate 内熔断 30 分钟，立即切到下一个通道；熔断期间直接跳过该通道，避免每次请求先失败一次浪费时延。
-- 其他错误：Workers AI 内部先回退 gpt-oss；仍失败且剩余预算 ≥3s 时，切到下一个通道。全部失败 → `degraded`（原文摘录）。
+- 超时与其他错误：非最后一个通道的单次生成超时为 8s（意图分类仍为 4s 总预算），超时或失败后在剩余预算内（≥1.5s）切到下一个通道；Workers AI 内部先回退 gpt-oss。生成总预算约 13s，全部失败 → `degraded`（原文摘录）。两个 SiliconFlow 通道共用账号余额，额度熔断同时生效；Workers AI 熔断中会被跳过，直接从 30B 回退到 8B。embedding 链不使用 8B 通道。
 - 配置：Pages secret `SILICONFLOW_API_KEY`（未配置时该通道视为不可用，自动只用 Workers AI）；可选环境变量 `SF_CHAT_MODEL`（默认 `Qwen/Qwen3-30B-A3B-Instruct-2507`，非 thinking 的 Instruct 版）、`SF_INTENT_MODEL`、`SF_EMBED_MODEL`（默认 `BAAI/bge-m3`，与 Workers AI 是同一个模型，两边的向量可以混用）。
 - 响应中的 `model` 字段为 `provider/model`；generation、intent_llm、retrieval 三步 check 会记录实际使用的通道，以及是否因额度或错误切换过。
 - `/api/health` 的 `providers` 字段：`order`（当前主备顺序）、`siliconflow` / `workersAi`（`ok`|`quota`|`configured`|`unknown`|`missing`）。只反映本 isolate 内最近一次调用的结果，不会为了探测去真实调用模型。
