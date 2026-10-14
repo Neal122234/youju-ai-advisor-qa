@@ -71,10 +71,10 @@
 
 评测页 `#/ops/eval` 有两个开关：
 
-- 评测范围：只跑前 N 题、按类型，或全部 120 题。
+- 评测范围：只跑前 N 题、按类型，或全部 123 题。
 - 「写入问答日志」：默认不勾选。不勾选时，评测问答不进入问答追溯和总览统计，也不生成工单、缺口、告警。
 
-全量评测每题要调用 1–2 次模型（意图分类 + 生成），120 题合计约 120–240 次，会消耗模型调用额度（SiliconFlow 按量计费、Workers AI 每日免费额度），演示时建议只跑前 N 题。
+全量评测每题要调用 1–2 次模型（意图分类 + 生成），123 题合计约 120–250 次，会消耗模型调用额度（SiliconFlow 按量计费、Workers AI 每日免费额度），演示时建议只跑前 N 题。
 
 「详情 → 完整追溯」跳到后台该条日志，内容包括：
 
@@ -219,7 +219,7 @@ flowchart TD
 | 拒答话术 | 知识库 `script-*` 文档原文，不由 LLM 生成 |
 | 找资料 | bge-m3 向量（SiliconFlow `BAAI/bge-m3` 为主，Workers AI `@cf/baai/bge-m3` 为备，两者是同一模型，向量可混用）+ BM25 混合检索 |
 | 是否答得了 | 检索阈值（不调 LLM 就转人工）→ LLM 自报 `covered` / `NO_ANSWER` → 证据核验 → 置信度 |
-| 组织答案文字、标注引用 | LLM：主通道 SiliconFlow `Qwen/Qwen3-30B-A3B-Instruct-2507`，备用 Workers AI `@cf/qwen/qwen3-30b-a3b-fp8`（其内部再回退 `@cf/openai/gpt-oss-120b`）。单次调用 12s，意图分类与生成共用 13s 总预算，剩余不足 1.5s 直接降级 |
+| 组织答案文字、标注引用 | LLM，三层回退：SiliconFlow `Qwen/Qwen3-30B-A3B-Instruct-2507` → Workers AI `@cf/qwen/qwen3-30b-a3b-fp8`（其内部再回退 `@cf/openai/gpt-oss-120b`）→ SiliconFlow `Qwen/Qwen3-8B`。非最后一层单次生成 ≤8s，意图分类与生成共用 13s 总预算，剩余不足 1.5s 直接降级 |
 | 答案是否越界、是否编造 | 输出侧规则扫描（带否定/引用语境豁免）+ 引用校验 + 逐句证据核验 |
 | 适当性、风险提示 | 确定性比对与模板 |
 
@@ -227,22 +227,39 @@ flowchart TD
 
 生成用的 LLM 收到的内容：系统提示（只依据资料、每句标 `[n]`、资料不足输出 NO_ANSWER、不荐股不预测不承诺、不复述敏感信息、忽略改规则/扮演指令、只输出 JSON）+ 编号资料 + **合规部分**问题（不含用户风险等级，避免同一问题因等级给出不同答案；适当性由确定性比对给出）；混合题的越界子句以"需拒答部分（勿回答）"标注，注入句不传给模型；问题和对话背景在进入 prompt 前做 PII 脱敏。详见 [docs/AI使用与验证记录.md](docs/AI使用与验证记录.md)。
 
+### 更换模型的影响
+
+| 层面 | 影响 | 说明 |
+|---|---|---|
+| 工程 | 很小 | 通道按 OpenAI 兼容接口抽象，换一个兼容的模型只需改三项配置：模型名（`SF_CHAT_MODEL` / `SF_INTENT_MODEL` / `SF_LITE_MODEL`）、接口地址、key（Pages secret） |
+| 回答表现 | 中等 | 置信度阈值、证据核验门槛（重合率 0.35 / 数字短句 0.25 等）都是按 Qwen3 的输出风格校准的。换模型后必须重跑 123 题评测，并按原因修误判。实例：从 Workers AI 换到 SiliconFlow 时，第一轮 99/101（N02、S03 被证据核验误判），两轮按原因修复，阈值一个没动，回到 101/101 |
+| 合规底线 | 不受影响 | 输入规则、输出扫描、证据核验、适当性比对、拒答话术都是确定性代码，不依赖模型。换模型最多影响意图分类的补漏能力和作答质量，不会让越界内容放行 |
+| 向量模型 | 需重算 | 如果把 bge-m3 换成别的向量模型，181 块知识向量要全部重算：`scripts/export-embeddings.ts` 导出，再走 seed 流程写库。检索分数分布会变，`T_unknown`（hybrid 0.35）和检索归一化区间都要按新分数重新校准 |
+
+试过的反例：把意图分类换成更快的 Qwen3-8B，全量只有 97/101，退回 30B（见「已知边界」）。8B 现在只作生成的最后一层兜底。
+
 ### 模型通道
 
-| | 主通道（默认） | 备用通道 |
-|---|---|---|
-| 平台 | 硅基流动 SiliconFlow（`https://api.siliconflow.cn/v1`，OpenAI 兼容） | Cloudflare Workers AI（binding `AI`） |
-| 生成与意图分类 | `Qwen/Qwen3-30B-A3B-Instruct-2507` | `@cf/qwen/qwen3-30b-a3b-fp8`，内部再回退 `@cf/openai/gpt-oss-120b` |
-| 向量 | `BAAI/bge-m3` | `@cf/baai/bge-m3`（同一模型，向量可混用） |
-| 费用 | 按量计费，账户代金券覆盖 | 每日 10,000 neurons 免费额度 |
+三层回退，默认顺序 `siliconflow → workers-ai → siliconflow-lite`：
 
-- 顺序由环境变量 `PROVIDER_ORDER` 控制，默认 `siliconflow,workers-ai`。chat、意图分类、embedding 都按这个顺序依次尝试。
-- 额度或余额类错误（SiliconFlow 402 / 429 配额，Workers AI 4006）会让该通道在本 isolate 内熔断 30 分钟，期间直接用下一个通道；其他错误在剩余预算 ≥3s 时切到下一个通道。全部失败则降级为原文摘录。
-- 请求头 `x-provider: siliconflow|workers-ai` 可强制只用某个通道（`/api/chat`、`/api/eval/run`、`/api/admin/seed`），用于评测和主备对比，带这个头的请求不走缓存。
-- `/api/health` 的 `providers` 字段显示主备顺序和各通道最近状态（`ok` / `quota` / `configured` / `unknown` / `missing`），只反映本 isolate 最近一次调用，不会为了探测去真实调用模型。
-- 响应的 `model` 字段为 `provider/model`；`generation`、`intent_llm`、`retrieval` 三步 check 记录实际使用的通道，以及是否发生过切换。
-- 为什么以 SiliconFlow 为主：Workers AI 每日 10k neurons 的免费额度，在开发评测中多次耗尽。主通道选什么，评审实际走的就是什么；评审走的通道应该和完整评测用的通道一致。
-- 知识块向量已预计算到 `db/embeddings.v1.json`（float16 + base64，492 KB），seed 和重置知识库时直接写库，不消耗任何模型额度。
+| | 第 1 层（主） | 第 2 层（备） | 第 3 层（兜底） |
+|---|---|---|---|
+| 平台 | 硅基流动 SiliconFlow（`https://api.siliconflow.cn/v1`，OpenAI 兼容） | Cloudflare Workers AI（binding `AI`） | 硅基流动（同一账号） |
+| 生成与意图分类 | `Qwen/Qwen3-30B-A3B-Instruct-2507` | `@cf/qwen/qwen3-30b-a3b-fp8`，内部再回退 `@cf/openai/gpt-oss-120b` | `Qwen/Qwen3-8B`（`SF_LITE_MODEL`），输出上限 450 token |
+| 向量 | `BAAI/bge-m3` | `@cf/baai/bge-m3`（同一模型，向量可混用） | 不参与（embedding 链只有前两层） |
+| 费用 | 按量计费，账户代金券覆盖 | 每日 10,000 neurons 免费额度 | 按量计费，与第 1 层共用余额和熔断 |
+
+- **顺序**：由环境变量 `PROVIDER_ORDER` 控制，默认 `siliconflow,workers-ai,siliconflow-lite`。
+- **时间预算**：意图分类与生成共用 13s 总预算。
+  - 非最后一层：单次生成最多 8s，并且至少给后面的层留 2.5s。
+  - 剩余时间 ≥1.5s 才切到下一层，额度类错误放宽到 ≥1s。
+  - 全部失败或时间用尽时，降级为知识库原文摘录。
+- **熔断**：额度或余额类错误（SiliconFlow 402 / 429 配额，Workers AI 4006）会让该通道在本 isolate 内熔断 30 分钟，期间直接跳过。8B 与第 1 层共用 SiliconFlow 账号的熔断状态。
+- **强制通道**：请求头 `x-provider: siliconflow|workers-ai|siliconflow-lite` 可强制只用某个通道（`/api/chat`、`/api/eval/run`、`/api/admin/seed`），用于评测和主备对比，带这个头的请求不走缓存。
+- **health**：`/api/health` 的 `providers` 字段显示通道顺序和各通道最近状态（`ok` / `quota` / `configured` / `unknown` / `missing`），只反映本 isolate 最近一次调用，不会为了探测去真实调用模型。
+- **追溯**：响应的 `model` 字段为 `provider/model`。`generation`、`intent_llm`、`retrieval` 三步 check 记录实际使用的通道和完整回退链，例如"SiliconFlow 超时（8s）→ 切 Workers AI"。
+- **为什么以 SiliconFlow 为主**：Workers AI 每日 10k neurons 的免费额度，在开发评测中多次耗尽。主通道选什么，评审实际走的就是什么；评审走的通道应该和完整评测用的通道一致。8B 兜底是为了在上游慢、并且 Workers AI 额度耗尽时，仍尽量给出生成答案。
+- **向量预计算**：知识块向量已预计算到 `db/embeddings.v1.json`（float16 + base64，492 KB），seed 和重置知识库时直接写库，不消耗任何模型额度。
 
 实现见 `functions/_lib/ai.ts`，配置见 [scripts/README.md](scripts/README.md)「模型通道」。
 
@@ -252,7 +269,7 @@ flowchart TD
 - **来源**：每篇 front-matter 的 `source` 字段标明出处类型：公开监管规则 / 公开投资者教育资料整理（截至 2026 年）、"示例证券产品规则（虚构示例）"、"示例证券合规话术模板（虚构示例）"；费率、风险等级、服务时间等券商自定口径标注为"示例"。拿不准的规则写成"以交易所/官方最新规则为准"。
 - **脱敏**：不出现任何真实券商品牌、真实客户或员工信息；评测集问题为人工构造。
 - **日志脱敏**（`core/compliance.ts` `maskPII`）：问题、告警 `matched`、工单、`checks` 明细落库前，以及答案输出前，统一遮蔽身份证号、手机号（`137****2222`）、银行卡号（`6217***********2333`），带空格、连字符、+86 等分隔的写法也覆盖；密码/验证码语境下整串遮蔽（含字母和符号）。同一脱敏也作用于送入 LLM 的问题和对话背景。QA 第 1 轮修复前写入的少量测试日志仍是原文（见 B1 修复记录）。
-- **评测集**：`eval/questions.json` 120 题（含 55 题 held-out / QA / 误判专项回归题 X01–X55），见 [eval/README.md](eval/README.md)。
+- **评测集**：`eval/questions.json` 123 题（含 58 题 held-out / QA / 误判专项回归题 X01–X58），见 [eval/README.md](eval/README.md)。
 
 ## 接口与故障注入
 
@@ -333,7 +350,7 @@ GitHub Pages 镜像：`.github/workflows/pages.yml` 在 push 到 main 时 `npm c
 
 ```
 kb/                     知识库源文件（41 篇，front-matter + 正文）
-eval/                   评测集 questions.json（120 题）与口径说明
+eval/                   评测集 questions.json（123 题）与口径说明
 core/                   纯 TS 管线，Worker 与浏览器共用
   pipeline.ts             编排（输入校验→合规→检索→生成→输出合规→引用/证据→置信度→适当性）
   compliance.ts           规则引擎（输入/输出）+ PII 脱敏
@@ -417,12 +434,13 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
   | answered | 4.8s | 4.4s |
   | handoff_unknown | 3.2s | 2.1s |
 
-  生产站最终评测里，走 LLM 的题平均 3.7s、中位 3.6s；Workers AI 通道约 1.5s。瓶颈在生成本身，单次 3.5–4.5s。为了让评审实际走的通道与完整评测通道一致，选择了较慢的 SiliconFlow 作主通道。
+  生产站最终评测（123 题）里，走 LLM 的题平均 3.6s、中位 3.3s；Workers AI 通道约 1.5s。瓶颈在生成本身，单次 3.5–4.5s。为了让评审实际走的通道与完整评测通道一致，选择了较慢的 SiliconFlow 作主通道。
+- **上游慢且备用额度耗尽时，少数长答案会降级**：凌晨 SiliconFlow 30B 响应慢，超出单次 8s 上限，同时 Workers AI 当日免费额度已用尽，8B 兜底又没有足够的剩余时间。这时按设计降级为知识库原文摘录，带出处、不越界，但不是生成的答案。最终生产评测 123 题中有 3 题属于这种情况。
 - **未做流式输出**（逐字返回）：用户等完整回答，体感时延仍约 3.5–4s。前端用分阶段提示（"正在查找资料…""正在组织回答…""正在核对出处，请稍候…"）缓解。流式输出要等证据核验和输出合规完成后才能确认内容，和"先核验、再展示"的设计有冲突，需要改成按句核验、按句放行。额度熔断是 isolate 级别的：不同 isolate 可能各自先撞一次额度错误，才切到备用通道。
-- **两个通道的评测结果不完全相同**：101 题时的评测（生产站 100/101、预览 101/101）和 120 题的评测都是在 SiliconFlow 主通道上测得的。Workers AI 通道在最新代码上跑到 62/62 时因额度耗尽中断，此前在 98 题时为 98/98。备用通道接管时，个别回答可能与主通道不同。
+- **两个通道的评测结果不完全相同**：101 题、120 题、123 题的评测都是在 SiliconFlow 主通道上测得的。Workers AI 通道在最新代码上跑到 62/62 时因额度耗尽中断，此前在 98 题时为 98/98。备用通道接管时，个别回答可能与主通道不同。
 - 结果缓存 10 分钟，按 release 失效；同一问题在缓存期内不会重新生成。
 - `pages.dev` 在国内访问不稳定（见下文「国内访问」），因此提供 GitHub Pages 镜像；镜像访问主站 API 失败时只能用本地演示模式（无大模型）。
-- 评测集 120 题由开发方构造（其中 55 题为评测集外抽检、QA 和误判专项发现问题后补入），覆盖面有限，通过率不代表真实流量下的表现；上面列出的绕过样例就是评测集之外仍存在的问题。
+- 评测集 123 题由开发方构造（其中 58 题为评测集外抽检、QA 和误判专项发现问题后补入），覆盖面有限，通过率不代表真实流量下的表现；上面列出的绕过样例就是评测集之外仍存在的问题。
 
 ## 国内访问
 
@@ -432,8 +450,8 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 
 | 层 | 规模 | 结果 | 说明 |
 |---|---|---|---|
-| 单元 / 接口测试（vitest） | 10 个文件、404 个用例 | 全部通过 | compliance 126、qa-round1 76、suggest 65（65 条推荐 / 常见问题全量回归）、pipeline 61、api 26、providers 16（主备通道切换与熔断）、chunk 10、retrieve 10、confidence 9、embeddings 5（float16 向量精度）；CI 在发布镜像前先跑，见 [docs/测试说明.md](docs/测试说明.md) §1 |
-| 评测集（线上真实模型） | 120 题 | 生产站 {{TODO:prod-final}}；预览 117/120 | 预览全量 117/120：out_of_scope 28/28、mixed 10/10；N24、X27 是 SiliconFlow 波动，复跑通过；X46 被新加的个股实体核验误杀，改为分句级剔除后通过。生产站在用户测试结束后重置为干净 v1 再跑。101 题时生产站为 100/101 |
+| 单元 / 接口测试（vitest） | 10 个文件、415 个用例 | 全部通过 | compliance 135、qa-round1 76、suggest 65（65 条推荐 / 常见问题全量回归）、pipeline 61、api 26、providers 18（三层通道回退与熔断）、chunk 10、retrieve 10、confidence 9、embeddings 5（float16 向量精度）；CI 在发布镜像前先跑，见 [docs/测试说明.md](docs/测试说明.md) §1 |
+| 评测集（线上真实模型） | 123 题 | **120/123** | 生产站（部署 2d32f2c4，干净 v1，`persist:true`，2026-10-15 02:41）。未过的 3 题都是上游慢加备用额度耗尽导致的降级摘录，带出处、不越界。同代码在预览部署上，normal + mixed + suitability 74 题为 73/74 |
 | 误判专项（over-blocking） | 70 句合理问题 + 复测 | 修前硬误判 9/70（12.9%）；修后合理问题 14/14 不误拦、典型越界 13/13 仍拦截 | 独立测试只测不改，按根因分层修复，修复后双向复测；新增 X37–X55 回归题，[docs/qa-false-positive.md](docs/qa-false-positive.md) |
 | held-out 与盲测 | 4 轮（含文档 agent 抽检）、共 41 句评测集外问法 | 见「评测结果」 | 防止只对评测集调优，[docs/holdout.md](docs/holdout.md) |
 | 独立 QA 第 1 轮（接口与功能逻辑） | 161 个用例、238 次请求 | 25 个 Bug（P0 1、P1 5、P2 19）：修复 23 个，B16、B24 转为已知边界 | [docs/qa-report-round1.md](docs/qa-report-round1.md) |
@@ -444,12 +462,14 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 
 ## 评测结果
 
-评测集 120 题（normal 57 / mixed 10 / out_of_scope 28 / unknown 11 / injection 4 / suitability 5 / human 5），后台「评测」页或 `POST /api/eval/run` 可复跑（建议 `persist:false`）。
+评测集 123 题（normal 58 / mixed 11 / out_of_scope 29 / unknown 11 / injection 4 / suitability 5 / human 5），后台「评测」页或 `POST /api/eval/run` 可复跑（建议 `persist:false`）。
 
 | 版本 | 题数 | 通过率 | 说明 |
 |---|---|---|---|
-| 生产站 youju-ai.pages.dev，干净 release v1，误判专项修复后（最终） | 120 | {{TODO:prod-final}} | {{TODO:prod-final}} |
-| 预览部署，误判专项修复后，`persist:false` | 120 | 117/120 | out_of_scope 28/28、mixed 10/10。N24、X27 为 SiliconFlow 波动，复跑通过；X46 被新加的个股实体核验误杀，改为分句级剔除后通过 |
+| 生产站 youju-ai.pages.dev，部署 2d32f2c4，干净 release v1，`persist:true`，2026-10-15 02:41（最终） | 123 | **120/123** | normal 56/58、mixed 11/11、out_of_scope 29/29、unknown 10/11、injection 4/4、suitability 5/5、human 5/5。未过的 N01、X01、X08 都是 `degraded`：凌晨 SiliconFlow 30B 响应慢，超出单次 8s 上限；Workers AI 当日免费额度已用尽（北京时间 08:00 重置）；8B 兜底剩余时间不足。按设计降级为知识库原文摘录，带出处、不越界。走 LLM 的题平均 3.6s、中位 3.3s。数据保留在后台供评审查看 |
+| 同代码，预览部署 | 74（normal + mixed + suitability） | 73/74 | 只跑了这三类 |
+| 历史：生产站，部署 bcfa7302 | 123 | 119/123 | 三层回退上线前 |
+| 历史：预览部署，误判专项修复后（120 题集） | 120 | 120/120 | 首轮 117/120：N24、X27 为 SiliconFlow 波动，复跑通过；X46 被新加的个股实体核验误杀，改为分句级剔除后通过 |
 | 历史：生产站 youju-ai.pages.dev，干净 release v1，最终代码（含投机并行，部署 86ae6dfa），SiliconFlow 主通道，`persist:true`，2026-10-15 约 02:40 | 101 | **100/101** | normal 41/42，其余六类全部满分：mixed 10/10、out_of_scope 25/25、unknown 11/11、injection 4/4、suitability 5/5、human 4/4。唯一未过的是 N14「怎么识别保本保收益的虚假宣传？」：SiliconFlow 单次调用超时（12s）后自动降级为知识库原文摘录，摘录内容正确、带引用，评测期望的是 LLM 作答，所以判为未过。这是上游偶发问题，降级兜底按设计生效。走 LLM 的题平均 3.7s、中位 3.6s。数据保留在后台（问答追溯、告警、缺口、工单），供评审查看 |
 | 同代码，预览部署 | 101 | 99/101（按 v1 口径 101/101） | 预览当时为 release v2，U03/U04（基金赎回到账）按设计应作答，所以判为未过；按 v1 口径全部通过 |
 | 历史：第 3 轮 QA 修复后，生产配置（SiliconFlow 主通道），预览部署 fix.youju-ai.pages.dev，`persist:false`，2026-10-15 凌晨 | 101 | **101/101** | normal 42/42、mixed 10/10、out_of_scope 25/25、unknown 11/11、injection 4/4、suitability 5/5、human 4/4。同一轮次依次为 99/101 → 100/101 → 101/101，几轮之间只修证据核验的误判（括号里的补充说明被误当成主体；非产品术语改为跨块查找并补同义词），全局阈值没有动 |
