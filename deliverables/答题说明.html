@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>答题说明 · 知界</title>
+<style>
+@page { size: A4; margin: 16mm 15mm; }
+body { font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif; color: #1c2430; font-size: 10.5pt; line-height: 1.6; margin: 0; }
+h1 { font-size: 19pt; margin: 0 0 2px; letter-spacing: .5px; }
+.sub { color: #5b6675; margin-bottom: 12px; }
+h2 { font-size: 12pt; margin: 16px 0 6px; padding-left: 8px; border-left: 3px solid #2b3a55; }
+table { width: 100%; border-collapse: collapse; margin: 4px 0 6px; font-size: 9.6pt; }
+th, td { border: 1px solid #d6dbe2; padding: 4px 7px; text-align: left; vertical-align: top; }
+th { background: #f1f3f6; font-weight: 600; white-space: nowrap; }
+a { color: #1f4f9a; text-decoration: none; }
+code { font-family: Menlo, monospace; font-size: 9pt; background: #f1f3f6; padding: 0 3px; border-radius: 3px; }
+ul { margin: 4px 0; padding-left: 18px; } li { margin: 2px 0; }
+.big { font-size: 11pt; }
+.note { color: #5b6675; font-size: 9pt; }
+</style></head><body>
+
+<h1>知界 · 合规投教助手</h1>
+<div class="sub">AI 投顾 / 智能问答运营与合规边界 · 场景：券商 App 内「投教助手」+ 运营后台（券商为虚构的「示例证券」，知识库为匿名构造）</div>
+
+<h2>提交物</h2>
+<table>
+<tr><th>Web 产品（主站）</th><td><a href="https://zhijie-qa.pages.dev">https://zhijie-qa.pages.dev</a>　用户端 <code>#/app</code>，运营后台 <code>#/ops</code>，打开即用，无需账号或 key</td></tr>
+<tr><th>Web 产品（镜像）</th><td><a href="https://neal122234.github.io/zhijie-ai-advisor-qa/">https://neal122234.github.io/zhijie-ai-advisor-qa/</a>　主站接口不可达时自动切浏览器内「本地演示模式」</td></tr>
+<tr><th>源代码仓库</th><td><a href="https://github.com/Neal122234/zhijie-ai-advisor-qa">https://github.com/Neal122234/zhijie-ai-advisor-qa</a>（压缩包内另附源码快照 <code>source.zip</code>）</td></tr>
+<tr><th>README</th><td>仓库首页 / <code>README.md</code>：目标用户、核心设计、AI 角色、数据使用、已知边界与未做事项（含合规边界）</td></tr>
+<tr><th>演示视频</th><td><code>demo.mp4</code>（约 168 秒，1080p，配音 + 字幕），分镜 <code>demo-script.md</code></td></tr>
+<tr><th>AI 使用与验证记录</th><td><code>docs/AI使用与验证记录.md</code>，评测迭代 <code>docs/eval-log.md</code>，盲测 <code>docs/holdout.md</code></td></tr>
+<tr><th>测试说明</th><td><code>docs/测试说明.md</code>：主链路、数据/接口异常（故障注入）、合规边界用例与复现方法</td></tr>
+</table>
+
+<h2>3 分钟体验路径</h2>
+<ul>
+<li>用户端点快捷问题：<b>科创板开通条件</b>（引用角标展开出处 + 置信度拆解 + 适当性提示）→ <b>宁德时代还能上车吗</b>（越界拒答 + 告警）→ <b>市盈率怎么看？茅台还能买吗</b>（部分拒答）→ <b>基金赎回多久到账</b>（知识未覆盖，转人工 + 工单）。</li>
+<li>每条回答点「查看完整追溯」：逐步校验时间线、检索命中块与分数、知识版本、模型与耗时。</li>
+<li>后台「知识缺口」选中「基金赎回」→ 起草知识 → 发布 v2 → 回归验证，缺口关闭；「知识库」看版本 diff、可回滚。</li>
+<li>演示栏「故障注入」选 LLM 故障：系统降级为原文摘录作答，合规校验不失效。</li>
+</ul>
+
+<h2>核心设计</h2>
+<table>
+<tr><th>知识入库</th><td>Markdown + front-matter（类别、产品风险等级、出处、生效日）；按小标题切分，bge-m3 向量化；每次发布生成 release，答案记录所用版本</td></tr>
+<tr><th>检索增强生成</th><td>向量 + BM25 混合检索；模型只依据资料作答，逐句标引用；逐句证据核验，无依据或含资料外数字的句子剔除</td></tr>
+<tr><th>合规边界</th><td>两层拦截：确定性规则引擎（荐股 / 预测 / 收益承诺 / 代客理财 / 内幕 / 隐私 / 注入）+ 规则放过时的 LLM 意图分类（只会多拦，不会放行）；输出侧再扫描；拒答话术取自知识库合规话术文档并引用</td></tr>
+<tr><th>置信度与转人工</th><td>置信度 = 0.35 检索 + 0.25 覆盖 + 0.25 落地性 + 0.15 引用；≥0.62 作答，0.45–0.62 作答附核实提示，&lt;0.45 或知识未覆盖则转人工，并且不展示模型生成内容</td></tr>
+<tr><th>适当性</th><td>用户 C1–C5 与产品 R1–R5 比对，不匹配时给出提示；所有投资相关回答附统一风险提示</td></tr>
+<tr><th>运营闭环</th><td>答不出 / 低置信 / 差评自动归并为知识缺口；越界触发告警；转人工生成工单 → 起草知识 → 发布新版本 → 回归验证 → 缺口关闭；版本可 diff、可回滚</td></tr>
+</table>
+
+<h2>验证结果</h2>
+<table>
+<tr><th>线上评测集</th><td class="big"><b>86/86</b>　正常 30、混合 10、越界 25、未知 9、注入 4、适当性 5、人工 3（真实模型，干净 release v1）</td></tr>
+<tr><th>评测集外盲测</th><td>第三轮 10 句新问法：10/10 无越界、无编造（其中 1 处决策标签可优化，已写入已知边界）</td></tr>
+<tr><th>单元测试</th><td>208 个用例全部通过（合规规则、切分、检索、置信度、管线异常、接口），CI 测试不过则不发布</td></tr>
+<tr><th>接口异常</th><td>LLM 故障或超时 → 降级为原文摘录；向量服务故障 → 只用关键词检索；数据库故障 → 照常作答并标注；限流返回 429</td></tr>
+<tr><th>国内访问</th><td>站长工具 33 个国内节点：主站 24 个可访问（含杭州），镜像约 26 个；见 <code>docs/国内访问实测.md</code></td></tr>
+</table>
+
+<h2>已知边界（摘要，详见 README）</h2>
+<ul>
+<li>演示后台没有登录和权限控制（生产环境需接入 RBAC 与审批）；限流按单个 isolate 计数，不是全局限流；依赖 Cloudflare 免费额度。</li>
+<li>规则加 LLM 两层拦截仍做不到 100%，靠告警复盘和盲测持续补充；镜像的本地模式没有大模型，未知问题可能答非所问。</li>
+<li>部分券商口径的数字（两融门槛、风险等级等）为示例，文中已标注「以交易所 / 券商最新规则为准」；系统没有接入真实行情和账户。</li>
+</ul>
+<p class="note">全部使用免费资源：Cloudflare Pages Functions + D1 + Workers AI（qwen3-30b-a3b 生成与意图分类，bge-m3 向量）。</p>
+</body></html>
