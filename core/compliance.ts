@@ -32,15 +32,16 @@ const NAME_RE = new RegExp(`(${[...STOCK_NAMES].sort((a, b) => b.length - a.leng
 const CORP_SUFFIX_RE = /[一-龥]{2,4}(股份|集团|控股|药业|制药|酒业|电器|矿业|新材)(?![一-龥]{0,2}(板块|行业|公司制|制度))/;
 // 6 位证券代码（排除金额/数量：后接 元/万/股/份/人/年 等）
 const CODE_RE = /(?<![\d.])(?:sh|sz|bj)?([0-9]{6})(?:\.(?:sh|sz|bj))?(?![\d.]|\s*(元|块|万|千|百|股|份|人|年|月|日|号|%|个|次|笔|手|分))/;
-const ANAPHORA_RE = /(这只|那只|这支|那支|该股|(?<!什么是)个股(?!期权)|这个股|这股|这票|这个票|那个票|这家公司|这只基金|该基金|这个基金|这个标的|该标的|(手里|手上|我)的?(股票|股|基金|票|持仓|仓位)|我持有的|我买的|我拿的|自选股|某只股|龙头股)/;
+const SECRET_CTX = /(密码|验证码|手机|电话|身份证|卡号|银行卡|账号|证件号)/;
+const ANAPHORA_RE = /(某只票|某只股票?|某个股票|某股|这只|那只|这支|那支|该股|(?<!什么是)个股(?!期权)|这个股|这股|这票|这个票|那个票|这家公司|这只基金|该基金|这个基金|这个标的|该标的|(手里|手上|我)的?(股票|股|基金|票|持仓|仓位)|我持有的|我买的|我拿的|自选股|某只股|龙头股)/;
 const SECTOR_RE = /((银行|券商|保险|白酒|医药|医疗|创新药|新能源车?|光伏|锂电|储能|风电|芯片|半导体|军工|地产|房地产|消费|科技|ai|人工智能|算力|机器人|汽车|煤炭|石油|有色|稀土|黄金|白银|低空经济|游戏|传媒|电力|基建|中字头|高股息|红利|小盘|大盘|蓝筹|题材|概念)(股|板块|概念股|赛道|etf)|(黄金|白银|白酒|光伏|锂电|半导体|芯片|军工|算力|稀土|创新药))/;
 const MARKET_RE = /(大盘|a股|沪指|上证(指数|综指)?|深证成指|深成指|创业板指|科创50|沪深300|中证500|中证1000|恒生指数|恒指|纳斯达克|纳指|道琼斯|标普|股市|市场|行情|指数|港股|美股|牛市|熊市|科创板|创业板|北交所|主板)/;
 const GENERIC_RE = /(股票|基金|债券|国债|逆回购|可转债|科创板|创业板|北交所|港股|美股|新股|etf|lof|理财产品|理财|期权|期货|st股?|权证|b股|a股|r[1-5]|产品)/;
 
 /* ---------------- 动词/句式 ---------------- */
-const TRADE_RE = /(买入|卖出|买|卖|加仓|减仓|补仓|清仓|满仓|半仓|建仓|抄底|逃顶|上车|下车|梭哈|all ?in|割肉|止损|止盈|持有|拿着|拿住|卖掉|抛|出手|入手|进场|入场|离场|接盘|追高|追涨|低吸|高抛|做t|定投|换仓|调仓|冲|跑|布局)/;
-const EVAL_RE = /(怎么样|如何|好不好|好吗|值不值|值得|靠谱|行不行|能不能|可以吗|分析|诊断|评价|看法|前景|基本面|估值|高吗|低吗|贵吗|便宜|有没有机会|机会|看看|看一下|看下|推荐|潜力|投资价值|有戏|稳吗)/;
-const PRED_STRONG = /(走势|后市|行情|前景|空间|目标价|点位|多少点|涨到|跌到|涨至|跌至|见底|见顶|怎么走|怎么看|牛市|熊市|涨还是跌|涨跌(趋势|方向)|翻倍|几倍|预测|预计)/;
+const TRADE_RE = /(调到|换到|换成|转到|切到|买入|卖出|买|卖|加仓|减仓|补仓|清仓|满仓|半仓|建仓|抄底|逃顶|上车|下车|梭哈|all ?in|割肉|止损|止盈|持有|拿着|拿住|卖掉|抛|出手|入手|进场|入场|离场|接盘|追高|追涨|低吸|高抛|做t|定投|换仓|调仓|冲|跑|布局)/;
+const EVAL_RE = /(怎么样|咋样|怎样|稳不稳|稳吗|靠不靠谱|行吗|好不好|好吗|值不值|值得|靠谱|行不行|能不能|可以吗|分析|诊断|评价|看法|前景|基本面|估值|高吗|低吗|贵吗|便宜|有没有机会|机会|看看|看一下|看下|推荐|潜力|投资价值|有戏|稳吗)/;
+const PRED_STRONG = /(走势|后市|行情|前景|空间|目标价|点位|多少点|(能|会|可以|有望)(到|上|破|站上|回到)(\d{3,5}点?|多少|哪)|\d{3,5}点|涨到|跌到|涨至|跌至|见底|见顶|怎么走|怎么看|牛市|熊市|涨还是跌|涨跌(趋势|方向)|翻倍|几倍|预测|预计)/;
 const PRED_WEAK = /(涨|跌|反弹|回调|涨停|跌停|上涨|下跌|暴涨|暴跌|大涨|大跌|拉升|起飞|突破|新高|新低)/;
 const FUT_PRED = /(会|将|能|还能|还会|要|会不会|能不能|还有|有没有)(继续|再|大|暴|持续)?(涨|跌|上涨|下跌|反弹|回调|见底|见顶|突破|翻倍|涨停|跌停|崩|起飞|拉升|新高|新低)/;
 const TIME_RE = /(现在|今天|明天|后天|最近|这周|本周|下周|下个?月|今年|明年|年底|年内|未来|接下来|近期|短期|目前|马上|当前|此时|这个位置|这个价|这个点|节后|周一|下半年|这时候|眼下|开盘|尾盘)/;
@@ -68,19 +69,20 @@ const STOCK_EXPLICIT: RegExp[] = [
   /(哪|什么)(只|支|个|些|款)(股票|股|基金|板块|标的|etf|产品)?.{0,4}?(好|最好|比较好|能涨|会涨|值得|靠谱|赚钱|收益高|推荐)/,
   /(牛股|妖股|金股|黑马股?|十倍股)/,
   /(给|发|报)(我)?(个|几个|一个)?(股票)?代码/,
-  /(有|有没有|有啥|有什么)(好的?|推荐的?|值得买的?|能涨的?|靠谱的?)(股票|股|基金|标的)/,
+  /(有|有没有|有啥|有什么)(好的?|推荐的?|值得买的?|能涨的?|靠谱的?|收益高的?)(股票|股|基金|标的|理财产品|理财|产品)/,
   /(选股|诊股|荐个股|帮我选|帮我挑)/,
   /(买|卖|入)(什么|啥|哪只|哪个|哪些)(股|票|好)?(吗|呢|\?|？)?$/,
 ];
 const PRED_EXPLICIT: RegExp[] = [
   /(能|会|可以|还能|还会)?(涨到|跌到)多少/, /能涨多少/, /目标价/, /多少点/, /涨还是跌/,
   /什么时候(能|会|才)?(涨|跌|反弹|见底|见顶|解套|回本|牛市|启动)/, /会不会(涨|跌|暴跌|崩|继续跌|继续涨)/,
-  /明天.{0,4}(涨|跌)/, /(哪|什么)(只|支|个|些)(股票?|基金|板块|票).{0,6}(会|能|要|将)(涨|涨停|翻倍|大涨|起飞|拉升)/, /预测.{0,6}(走势|涨跌|行情|点位)/, /(能|会)翻倍/, /翻几倍/,
+  /明天.{0,4}(涨|跌)/, /(能|会|可以|有望)(到|上|破|站上|跌破|回到)\d{3,5}点/, /(哪|什么)(只|支|个|些)(股票?|基金|板块|票).{0,6}(会|能|要|将)(涨|涨停|翻倍|大涨|起飞|拉升)/, /预测.{0,6}(走势|涨跌|行情|点位)/, /(能|会)翻倍/, /翻几倍/,
 ];
-const RETURN_STRONG = /(稳赚|稳赚不赔|只赚不赔|包赚|躺赚|保本保息|保本保收益|保证收益|保证.{0,4}(赚|收益|不亏|回本|翻倍)|承诺.{0,4}(收益|保本|不亏)|零风险|无风险(收益|理财|产品|投资)?|稳稳的?收益|高收益.{0,4}(低风险|无风险|零风险)|收益(有|能)保障|保底收益|刚性兑付|刚兑|一定(能)?赚|肯定(能)?赚|不会亏|不亏钱|稳定翻倍|日赚|月入\d|保证年化|保证.{0,6}\d+(\.\d+)?%|保本.{0,6}(拿|赚|收益|年化)|(每年|每月|年化)(稳定)?(拿|赚)\d+(\.\d+)?%)/;
+const RETURN_STRONG = /(稳赚|稳赚不赔|只赚不赔|包赚|躺赚|保本保息|保本保收益|保证收益|保证.{0,4}(赚|收益|不亏|回本|翻倍)|承诺.{0,4}(收益|保本|不亏)|零风险|无风险(收益|理财|产品|投资)?|稳稳的?收益|高收益.{0,4}(低风险|无风险|零风险)|收益(有|能)保障|保底收益|刚性兑付|刚兑|一定(能)?赚|肯定(能)?赚|不会亏|不亏钱|稳定翻倍|日赚|月入\d|月入过万|月入上万|月赚\d|日赚\d|稳定(盈利|赚钱|获利|收益)|躺赚|暴富|快速(赚钱|致富|翻倍)|一夜翻身|保证年化|保证.{0,6}\d+(\.\d+)?%|保本.{0,6}(拿|赚|收益|年化)|(每年|每月|年化)(稳定)?(拿|赚)\d+(\.\d+)?%)/;
 const RETURN_SOFT = /(保本|保收益|保息)/;
 const RETURN_ASK = /(收益率?(能|会|可以)?(有|达到|到)?多少|年化(能|会)?(有|到)?多少|一年能赚多少|能赚多少|赚多少钱)/;
-const REQUEST_FRAME = /(有没有|有吗|推荐|哪个|哪些|我想|想要|想买|给我|能不能|可以|是不是|吗|么|保证|承诺|确保)/;
+// 收益承诺"请求"语境：要产品/要承诺。只问"某产品是否保本/会不会亏"属于产品属性科普，不算越界
+const REQUEST_FRAME = /(有没有|有吗|推荐|哪个|哪些|哪款|我想|想要|想买|给我|帮我找|找个|来个|保证|承诺|确保|要求|必须)/;
 const MANAGED: RegExp[] = [
   /(代客理财|代客操作|代理炒股|代炒|代操盘|代操作)/,
   /(帮|替)(我|忙)(操作|炒股|炒|买入?|卖出?|下单|交易|管理|打理|理财|操盘|盯盘|挂单|申购|抢|做)/,
@@ -92,10 +94,10 @@ const MANAGED: RegExp[] = [
 const INSIDER: RegExp[] = [
   /(内幕(消息|信息)|内部消息|内部信息|小道消息|独家消息)/, /提前(知道|拿到|得到).{0,6}(消息|利好|公告)/,
   /(庄家|坐庄|跟庄|控盘|老鼠仓|对倒)/, /主力(资金)?(要|会|在)?(拉升|出货|吸筹|洗盘|进场|建仓|动向)/, /(拉升|拉盘|砸盘)/,
-  /操纵(股价|市场)/, /(荐股群|带单群|牛股群|股票群|vip群|内部群|稳赚群|老师带)/, /(加|进)(个)?(群|微信|vx|qq|wx|电报群)/,
+  /操纵(股价|市场)/, /(群里|群友|老师|大v|博主|内部|朋友|有人|据说|听说)(说|讲|透露|爆料|消息)?.{0,12}(重组|利好|拉升|收购|并购|借壳|涨停|内幕)/, /(荐股群|带单群|牛股群|股票群|vip群|内部群|稳赚群|老师带)/, /(加|进)(个)?(群|微信|vx|qq|wx|电报群)/,
 ];
 const PRIVACY: RegExp[] = [
-  /(查|查询|查一下|查看|调取|告诉我|给我|看看|看下|透露|提供|帮我查)(一下)?.{0,8}(别人|他人|其他(人|客户|用户)|别的(客户|用户)|我(朋友|老婆|老公|同事|家人|爸|妈|父母|儿子|女儿|男朋友|女朋友)|某人|张三|李四|这个人|那个人|客户|股东)的?.{0,4}(账户|账号|持仓|身份证|手机号?|电话|住址|地址|资产|交易记录|流水|信息|收益|余额|资料)/,
+  /(查|查询|查一下|查看|调取|告诉我|给我|看看|看下|透露|提供|帮我查)(一下)?.{0,8}(别人|他人|其他(人|客户|用户)|别的(客户|用户)|我(朋友|老婆|老公|同事|家人|爸|妈|父母|儿子|女儿|男朋友|女朋友)|某人|张三|李四|这个人|那个人|客户|股东)[\u4e00-\u9fa5]{0,3}的?.{0,10}(开户|账户|账号|持仓|身份证|手机号?|电话|住址|地址|资产|交易记录|流水|信息|收益|余额|资料)/,
   /(他|她|ta)的(持仓|账户|手机号|身份证|资产|交易记录|余额)/,
 ];
 const PRIVACY_OWNER = /(别人|他人|其他(人|客户|用户)|别的(客户|用户)|客户经理|经理|员工|工作人员|同事|朋友|老婆|老公|家人|张三|李四|王[\u4e00-\u9fa5]{0,2}|某人|这个人|那个人|他|她)的?.{0,6}(身份证号?|住址|家庭地址|地址|手机号|电话号码?|持仓|账户|资产|余额|交易记录|收益)/;
@@ -146,6 +148,8 @@ export interface ComplianceAnalysis {
   refusedText: string;     // 越界部分
   entities: string[];
   notes: string[];
+  /** 反诈/识别类问法（怎么判断是不是骗局） */
+  fraudEdu: boolean;
 }
 
 const VIOLATION_CATS: ComplianceCategory[] = ['stock_pick', 'price_prediction', 'return_promise', 'managed_account', 'insider_manip', 'privacy'];
@@ -159,7 +163,8 @@ function firstMatch(res: RegExp[], s: string): string | null {
 function findEntities(s: string): { specific: string[]; market: string[] } {
   const specific: string[] = [];
   const m1 = s.match(NAME_RE); if (m1) specific.push(m1[0]);
-  const m2 = s.match(CODE_RE); if (m2) specific.push(m2[1]);
+  // 6 位数字出现在密码/验证码/手机号/身份证/卡号语境时不当作证券代码
+  const m2 = SECRET_CTX.test(s) ? null : s.match(CODE_RE); if (m2) specific.push(m2[1]);
   const m3 = s.match(US_TICKERS); if (m3) specific.push(m3[0]);
   const m4 = s.match(CORP_SUFFIX_RE); if (m4 && !/示例/.test(m4[0])) specific.push(m4[0]);
   const m5 = s.match(ANAPHORA_RE); if (m5) specific.push(m5[0]);
@@ -259,7 +264,7 @@ function analyzeClause(raw: string, carry: string[]): ClauseAnalysis {
     }
     if (!hits.some((h) => h.category === 'stock_pick')) {
       const sl = s.match(SLANG_RE);
-      if (sl && /(吗|么|不|呢|吧|\?|？|该|要|能|可以|适合|时候|现在)/.test(s)) add(hit('stock_pick', 'high', sl[0]));
+      if (sl && /(吗|么|不|呢|吧|\?|？|该|要|能|可以|适合|时候|现在|哪个|哪只|哪些|什么|啥)/.test(s)) add(hit('stock_pick', 'high', sl[0]));
     }
     // 个性化资产配置建议
     const alloc = s.match(/(我|我家|手里|手上).{0,6}(\d+万|\d+块|\d+元|闲钱|存款|积蓄|工资|奖金|年终奖).{0,10}(怎么|如何|该|应该)?(投|买|配置|理财|分配|安排)/);
@@ -300,27 +305,37 @@ export function analyzeInput(question: string): ComplianceAnalysis {
     if (!ex) hits.push(h);
     else if (sevRank(h.severity) > sevRank(ex.severity)) Object.assign(ex, h);
   }
-  const violations = hits.filter((h) => isViolation(h.category));
+  let violations = hits.filter((h) => isViolation(h.category));
+  // 反诈问法 + 仅内幕/荐股群类命中（"群里说某票有重组消息，可信吗"）：仍记告警，但按"识别方法"科普作答（partial_refusal）
+  // 泛化的产品推荐请求（"有什么好的理财推荐"，无具体证券）：记告警、不推荐产品，改为讲风险等级与适当性
+  const productEdu = !entities0(clauses) && violations.length > 0 && violations.every((h) => h.category === 'stock_pick' && /(理财|基金|产品)/.test(h.matched) && !/(股票|股|票|标的|板块)$/.test(h.matched));
+  const insiderEdu = fraudEdu && violations.length > 0 && violations.every((h) => h.category === 'insider_manip');
   const injection = hits.some((h) => h.category === 'prompt_injection');
   const complaint = hits.some((h) => h.category === 'complaint_human');
   const compliant = clauses.filter((c) => c.substantive);
   const notes: string[] = [];
   let verdict: ComplianceAnalysis['verdict'] = 'clean';
   if (complaint) verdict = 'handoff';
-  else if (violations.length) verdict = compliant.length ? 'mixed' : 'refuse';
+  else if (violations.length) verdict = compliant.length || insiderEdu || productEdu ? 'mixed' : 'refuse';
   else if (injection) verdict = compliant.length ? 'clean' : 'refuse';
   const entities = [...new Set(clauses.flatMap((c) => c.entities))];
-  if (entities.length) notes.push(`识别到个股/板块实体：${entities.join('、')}`);
+  if (entities.length) notes.push(`识别到个股/板块实体：${maskPII(entities.join('、'), true)}`);
   if (clauses.some((c) => c.educational)) notes.push('含教育性/概念性问句');
   if (verdict === 'mixed') notes.push('混合问题：越界部分拒答，知识部分作答');
   if (injection) notes.push('检测到提示注入，已忽略注入指令');
+  if (productEdu) notes.push('泛化产品推荐请求：不推荐具体产品，改为讲风险等级与适当性');
+  if (insiderEdu) notes.push('反诈识别类问法：不评价消息真假与个股，改为讲识别方法');
+  for (const h of hits) h.matched = maskPII(h.matched, true).replace(/(?<!\d)\d{6}(?!\d)/g, (m) => (SECRET_CTX.test(s) ? '******' : m));
   return {
-    hits, violations, injection, complaint, verdict, clauses, entities, notes,
-    compliantText: (injection || violations.length ? compliant.map((c) => c.text).join('，') : s) || s,
+    hits, violations, injection, complaint, verdict, clauses, entities, notes, fraudEdu,
+    compliantText: insiderEdu && !compliant.length ? '如何识别非法荐股群和虚假内幕消息、重组消息'
+      : productEdu && !compliant.length ? '如何根据产品风险等级与自身风险承受能力选择理财产品，常见基金类型的风险等级'
+      : (injection || violations.length ? compliant.map((c) => c.text).join('，') : s) || s,
     refusedText: clauses.filter((c) => c.hits.some((h) => isViolation(h.category) || h.category === 'prompt_injection')).map((c) => c.text).join('，'),
   };
 }
 
+const entities0 = (cs: ClauseAnalysis[]) => cs.some((c) => c.entities.length > 0);
 const sevRank = (s: Sev) => (s === 'high' ? 3 : s === 'medium' ? 2 : 1);
 
 /* ---------------- 输出侧 ---------------- */

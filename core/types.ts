@@ -50,7 +50,7 @@ export interface DocMeta {
 }
 
 export type LlmMessage = { role: string; content: string };
-export type LlmFn = (messages: LlmMessage[], o?: { maxTokens?: number; json?: boolean }) => Promise<string>;
+export type LlmFn = (messages: LlmMessage[], o?: { maxTokens?: number; json?: boolean; timeoutMs?: number; noFallback?: boolean }) => Promise<string>;
 
 export interface Adapters {
   retrieve(q: string): Promise<{ hits: Retrieved[]; mode: 'hybrid' | 'keyword' }>;
@@ -66,6 +66,8 @@ export interface Adapters {
 export interface PipelineOptions {
   /** 'server'（默认）：llm 为 null 视为异常 → degraded；'local'：浏览器本地演示模式，抽取式作答 */
   mode?: 'server' | 'local';
+  /** 第二层 LLM 意图分类（默认开启；llm=null 时自动跳过） */
+  intentLlm?: boolean;
   maxInputLen?: number;          // 默认 500
   tUnknownHybrid?: number;       // 默认 0.35
   tUnknownKeyword?: number;      // 默认 0.25

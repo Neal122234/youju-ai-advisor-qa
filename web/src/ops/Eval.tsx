@@ -12,11 +12,12 @@ export function EvalPage() {
   const [onlyFail, setOnlyFail] = useState(false);
   const [type, setType] = useState('');
   const [t0, setT0] = useState(0);
+  const [prog, setProg] = useState<{ done: number; total: number } | null>(null);
 
   async function start(ids?: string[]) {
-    setBusy(true); setErr(null); setT0(Date.now());
+    setBusy(true); setErr(null); setT0(Date.now()); setProg(null);
     try {
-      const r = await api.runEval(ids);
+      const r = await api.runEval(ids, (done, total, partial) => { setProg({ done, total }); if (!ids) setRun(partial); });
       if (ids && run) {
         const m = new Map(r.results.map((x) => [x.id, x]));
         const results = run.results.map((x) => m.get(x.id) ?? x);
@@ -25,7 +26,7 @@ export function EvalPage() {
         results.forEach((x) => { const e = bt.get(x.type) ?? { type: x.type, total: 0, passed: 0 }; e.total++; if (x.pass) e.passed++; bt.set(x.type, e); });
         setRun({ ...run, results, passed, passRate: passed / results.length, byType: [...bt.values()], kbRelease: r.kbRelease });
       } else setRun(r);
-    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); setProg(null); }
   }
 
   const rows = (run?.results ?? []).filter((r) => (!onlyFail || !r.pass) && (!type || r.type === type));
@@ -41,7 +42,7 @@ export function EvalPage() {
         </>}
       />
       {err && <ErrorBox msg={err} onRetry={() => start()} />}
-      {busy && <div className="progress"><span /><span className="muted small">正在逐题运行，题量约 60，线上模式需 1–3 分钟（开始于 {new Date(t0).toLocaleTimeString()}）</span></div>}
+      {busy && <div className="progress"><span /><span className="muted small">正在分批运行（每批 8 题）{prog ? `：已完成 ${prog.done}/${prog.total}` : '…'}，线上模式约 2–4 分钟（开始于 {new Date(t0).toLocaleTimeString()}）</span></div>}
       {!run && !busy && !err && <Empty title="还没有评测结果">点击「运行评测集」，逐题对比期望决策、必须引用、禁用词与告警类别。</Empty>}
       {run && (
         <>

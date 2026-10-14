@@ -9,6 +9,8 @@ import { dbFor, loadKb, persistChat, type KbState } from './db';
 import { uid } from './http';
 
 const edgeCache = () => (globalThis.caches as unknown as { default: Cache }).default;
+/** 管线逻辑版本：改动判定/提示词时递增，避免命中旧逻辑的缓存结果 */
+export const PIPELINE_VERSION = 'p12';
 export const CACHE_TTL_MS = 10 * 60_000;
 const memCache = new Map<string, { at: number; resp: ChatResponse }>();
 export function clearChatCache() { memCache.clear(); }
@@ -61,7 +63,7 @@ export async function answer(env: Env, req: ChatRequest, faults: Set<Fault>, o: 
 
   const sanitized = sanitizeInput(req.question).text;
   const useCache = o.useCache !== false && faults.size === 0 && !(req.history?.length) && !o.noLlm;
-  const cacheKey = useCache ? await sha(`${kb.release}|${req.userRisk}|${normalizeQuestion(sanitized)}`) : '';
+  const cacheKey = useCache ? await sha(`${PIPELINE_VERSION}|${kb.release}|${req.userRisk}|${normalizeQuestion(sanitized)}`) : '';
   let resp: ChatResponse | null = null;
   if (useCache && sanitized) {
     const c = await cacheGet(cacheKey);

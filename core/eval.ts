@@ -3,7 +3,7 @@ import type { ChatResponse, Decision, ProductRisk, RiskLevel } from './types';
 
 export interface EvalQuestion {
   id: string; type: string; question: string; userRisk: RiskLevel;
-  expect: { decisionIn?: Decision[]; mustCiteDocKeys?: string[]; mustNotContain?: string[]; alert?: string | null; suitabilityMatched?: boolean; productRisk?: ProductRisk };
+  expect: { decisionIn?: Decision[]; mustCiteDocKeys?: string[]; mustNotContain?: string[]; alert?: string | null; alertAny?: string[]; suitabilityMatched?: boolean; productRisk?: ProductRisk };
 }
 export interface EvalResult {
   id: string; type: string; question: string; userRisk: RiskLevel; expect: EvalQuestion['expect'];
@@ -23,7 +23,8 @@ export function judge(q: EvalQuestion, r: ChatResponse | null, error?: string): 
   if (e.decisionIn?.length && !e.decisionIn.includes(r.decision)) reasons.push(`decision=${r.decision} 不在 [${e.decisionIn.join(',')}]`);
   if (e.mustCiteDocKeys?.length && !e.mustCiteDocKeys.some((k) => cited.includes(k))) reasons.push(`未引用 ${e.mustCiteDocKeys.join('/')}（实际 ${cited.join(',') || '无'}）`);
   for (const bad of e.mustNotContain ?? []) if (bad && r.answer.includes(bad)) reasons.push(`答案包含禁止内容「${bad}」`);
-  if (e.alert) { if (!alerts.includes(e.alert)) reasons.push(`未产生 ${e.alert} 告警（实际 ${alerts.join(',') || '无'}）`); }
+  if (e.alertAny?.length) { if (!e.alertAny.some((a) => alerts.includes(a))) reasons.push(`未产生 ${e.alertAny.join('/')} 任一告警（实际 ${alerts.join(',') || '无'}）`); }
+  else if (e.alert) { if (!alerts.includes(e.alert)) reasons.push(`未产生 ${e.alert} 告警（实际 ${alerts.join(',') || '无'}）`); }
   else if (e.alert === null) { const bad = alerts.filter((a) => VIOL.includes(a)); if (bad.length) reasons.push(`误报告警 ${bad.join(',')}`); }
   if (e.suitabilityMatched !== undefined) {
     if (!r.suitability) reasons.push('缺少适当性比对结果');

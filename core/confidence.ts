@@ -90,3 +90,45 @@ export function maxProductRisk(chunks: Chunk[]): ProductRisk | null {
 }
 
 export const round = (x: number) => Math.round(x * 1000) / 1000;
+
+/* ---------------- 逐句证据核验 ---------------- */
+/** 把"。[3]"这类标点后的引用挪到句末标点前，保证引用与句子绑定 */
+export function attachCitations(answer: string): string {
+  return answer.replace(/([。！？；;!?])\s*((?:[\[【]\s*\d+(?:\s*[,，、]\s*\d+)*\s*[\]】])+)/g, '$2$1');
+}
+
+/** 句中出现的数字/比例/T+n 等"硬事实"，必须能在资料原文中找到 */
+const NUM_RE = /t\s*\+\s*\d+|\d+(?:\.\d+)?\s*(?:%|个?交易日|万元?|元|股|年|个月|天|日|小时|点|倍|手)?/gi;
+export function numericFacts(s: string): string[] {
+  return [...new Set((s.replace(/\[\d+\]/g, '').toLowerCase().match(NUM_RE) ?? []).map((x) => x.replace(/\s+/g, '')).filter((x) => /\d/.test(x)))];
+}
+const normNum = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/[，,]/g, '');
+
+export interface SentenceEvidence {
+  text: string; cited: number[]; overlap: number; best: number; bestOverlap: number;
+  missingNumbers: string[]; supported: boolean;
+  /** 所引块不支撑、但其它块高度重合 → 应改引最佳块 */
+  recite: boolean;
+}
+export const SENT_SUPPORT = 0.35;   // 句子与资料的字二元组重合率下限
+export const SENT_AUTOCITE = 0.5;   // 无引用句自动补引用的重合率下限
+
+/** 逐句核验：重合率（对所引块，无引用则对最佳块）+ 数字核验。不过关的句子视为无依据。 */
+export function sentenceEvidence(answer: string, numbered: Chunk[]): SentenceEvidence[] {
+  const sets = numbered.map((c) => charBigramSet(`${c.heading}${c.text}`));
+  const raw = numbered.map((c) => normNum(`${c.docTitle}${c.heading}${c.text}`));
+  const out: SentenceEvidence[] = [];
+  for (const s of factualSentences(answer)) {
+    const sb = charBigramSet(s.replace(/\[\d+\]/g, ''));
+    const ov = (i: number) => { if (!sb.size) return 0; let n = 0; for (const b of sb) if (sets[i].has(b)) n++; return n / sb.size; };
+    const cited = [...new Set(extractCitations(s))].filter((n) => n >= 1 && n <= numbered.length);
+    let best = 0; let bestOverlap = 0;
+    numbered.forEach((_, i) => { const o = ov(i); if (o > bestOverlap) { bestOverlap = o; best = i + 1; } });
+    const overlap = cited.length ? Math.max(...cited.map((n) => ov(n - 1))) : bestOverlap;
+    const pool = cited.length ? cited.map((n) => raw[n - 1]).join('') : raw.join('');
+    const missingNumbers = numericFacts(s).filter((x) => !pool.includes(normNum(x)) && !raw.join('').includes(normNum(x)));
+    const recite = cited.length > 0 && overlap < SENT_SUPPORT && bestOverlap >= SENT_AUTOCITE;
+    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, recite, supported: (overlap >= SENT_SUPPORT || recite) && missingNumbers.length === 0 });
+  }
+  return out;
+}

@@ -56,7 +56,7 @@ async function callModel(ai: AiBinding, model: string, messages: LlmMessage[], m
   }
   // qwen3：/no_think 关闭思考，降低延迟；仍兼容可能返回的 <think>
   const msgs = messages.map((m, i) => (i === messages.length - 1 && m.role === 'user' ? { ...m, content: `${m.content}\n/no_think` } : m));
-  const res = await ai.run(model, { messages: msgs, max_tokens: maxTokens, temperature: 0.2 });
+  const res = await ai.run(model, { messages: msgs, max_tokens: maxTokens, temperature: 0 });
   return extractText(res);
 }
 
@@ -68,15 +68,15 @@ export function createLlm(env: Env, faults: Set<Fault>, budgetMs = LLM_TIMEOUT_M
   if (!env.AI) return { llm: null, modelName: () => null, calls: () => 0 };
   const ai = env.AI;
   const llm: LlmFn = async (messages, o) => {
-    const deadline = Date.now() + budgetMs;
+    const deadline = Date.now() + (o?.timeoutMs ?? budgetMs);
     const maxTokens = o?.maxTokens ?? 700;
     const attempt = async (model: string) => {
       calls++;
       const left = deadline - Date.now();
-      if (left <= 0) throw new TimeoutError('LLM', budgetMs);
+      if (left <= 0) throw new TimeoutError('LLM', o?.timeoutMs ?? budgetMs);
       const p = (async () => {
         if (faults.has('llm')) throw new Error(`故障注入：${model} 不可用`);
-        if (faults.has('slow-llm')) await sleep(budgetMs + 1000);
+        if (faults.has('slow-llm')) await sleep((o?.timeoutMs ?? budgetMs) + 1000);
         return callModel(ai, model, messages, maxTokens);
       })();
       const text = await withTimeout(p, left, `LLM(${model})`);
@@ -86,7 +86,8 @@ export function createLlm(env: Env, faults: Set<Fault>, budgetMs = LLM_TIMEOUT_M
     };
     try { return await attempt(MODEL_MAIN); }
     catch (e) {
-      if (e instanceof TimeoutError || deadline - Date.now() < 3000) throw e;
+      console.warn('[llm] main failed', MODEL_MAIN, e instanceof Error ? e.message : String(e));
+      if (o?.noFallback || e instanceof TimeoutError || deadline - Date.now() < Math.min(3000, (o?.timeoutMs ?? budgetMs) * 0.6)) throw e;
       return await attempt(MODEL_FALLBACK);
     }
   };

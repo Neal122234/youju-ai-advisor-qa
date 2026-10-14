@@ -26,7 +26,8 @@ export interface ApiClient {
   rollback(docKey: string, version: number): Promise<Release>;
   releases(): Promise<Release[]>;
   previewChunks(content: string): Promise<PreviewChunk[]>;
-  runEval(ids?: string[]): Promise<EvalRun>;
+  /** 线上实现按 8 题一批调用 /api/eval/run（offset/limit），onProgress 回报进度与累计结果 */
+  runEval(ids?: string[], onProgress?: (done: number, total: number, partial: EvalRun) => void): Promise<EvalRun>;
 }
 
 export class ApiError extends Error {
@@ -214,6 +215,16 @@ async function http<T = any>(path: string, init?: RequestInit & { timeoutMs?: nu
     throw new ApiError('NETWORK', '网络不可达：' + (err?.message ?? ''));
   } finally { clearTimeout(t); }
 }
+async function withRetry<T>(fn: () => Promise<T>, tries = 2): Promise<T> {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e: any) {
+      const retriable = e instanceof ApiError && (e.code === 'NETWORK' || e.code === 'BAD_JSON' || (e.status >= 500 && e.status !== 501));
+      if (!retriable || i >= tries) throw e;
+      await new Promise((r) => setTimeout(r, i === 0 ? 800 : 2000));
+    }
+  }
+}
 const post = (body: any, extra?: RequestInit) => ({ method: 'POST', body: JSON.stringify(body ?? {}), ...extra });
 const qs = (p: Record<string, any>) => {
   const s = Object.entries(p).filter(([, v]) => v !== undefined && v !== '' && v !== null).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
@@ -232,7 +243,8 @@ export const remoteApi: ApiClient = {
   async health() { const r = await http('/api/health', { timeoutMs: 2500 }); return { ok: !!r.ok, kbRelease: str(g(r, 'kbRelease')), chunks: num(r.chunks), ai: !!r.ai }; },
   chat: (req) => {
     const f = getFault();
-    return http('/api/chat', post(req, { headers: f ? { 'x-fault': f } : {} } as any));
+    // 边缘偶发 52x / 网络抖动：最多重试 2 次（退避 0.8s、2s）；4xx 与超时不重试
+    return withRetry(() => http('/api/chat', post(req, { headers: f ? { 'x-fault': f } : {}, timeoutMs: 45000 } as any)));
   },
   async feedback(qaId, helpful, note) { await http('/api/feedback', post({ qaId, helpful, note })); },
   async logs(p = {}) { return list(await http('/api/logs' + qs(p)), 'logs').map(norm.log); },
@@ -272,7 +284,21 @@ export const remoteApi: ApiClient = {
     const r = await http('/api/kb/preview-chunks', post({ content }));
     return list(r, 'chunks').map((c: AnyObj, i: number) => ({ ord: num(g(c, 'ord'), i), heading: str(g(c, 'heading')), text: str(g(c, 'text')) }));
   },
-  async runEval(ids) { return norm.evalRun(await http('/api/eval/run', post(ids ? { ids } : {}, { timeoutMs: 300000 } as any))); },
+  async runEval(ids, onProgress) {
+    // 分批：线上单请求有子请求/CPU 限制，每批 8 题，失败的批次重试
+    const BATCH = 8;
+    const all: EvalItem[] = []; let kbRelease = ''; let total = ids?.length ?? 0; let offset: number | null = 0;
+    while (offset !== null) {
+      const body: Record<string, unknown> = { offset, limit: BATCH }; if (ids?.length) body.ids = ids;
+      const raw: any = await withRetry(() => http('/api/eval/run', post(body, { timeoutMs: 180000 } as any)), 3);
+      const part = norm.evalRun(raw);
+      all.push(...part.results); kbRelease = part.kbRelease || kbRelease;
+      total = num(raw.totalQuestions, 0) && !ids?.length ? num(raw.totalQuestions) : (ids?.length ?? all.length);
+      offset = raw.nextOffset === null || raw.nextOffset === undefined ? null : num(raw.nextOffset);
+      onProgress?.(all.length, total, norm.evalRun({ results: all, kbRelease }));
+    }
+    return norm.evalRun({ results: all, kbRelease });
+  },
 };
 
 /* ---------------- 模式选择 ---------------- */

@@ -16,6 +16,14 @@ export interface KeywordIndex {
 const K1 = 1.2;
 const B = 0.75;
 
+/** 同一 chunks 数组只建一次索引（Worker 内按 release 缓存 chunks，避免每次请求重复分词 181 块） */
+const INDEX_CACHE = new WeakMap<Chunk[], KeywordIndex>();
+export function getKeywordIndex(chunks: Chunk[]): KeywordIndex {
+  let idx = INDEX_CACHE.get(chunks);
+  if (!idx) { idx = buildKeywordIndex(chunks); INDEX_CACHE.set(chunks, idx); }
+  return idx;
+}
+
 export function buildKeywordIndex(chunks: Chunk[]): KeywordIndex {
   const docs = chunks.map((c) => {
     // 标题与小标题各计一次额外权重
@@ -78,7 +86,7 @@ const r3 = (x: number) => Math.round(x * 1000) / 1000;
 
 /** 纯关键词检索器（浏览器本地模式 / embedding 失败兜底） */
 export function createKeywordRetriever(chunks: Chunk[], opts: RetrieveOptions = {}) {
-  const idx = buildKeywordIndex(chunks);
+  const idx = getKeywordIndex(chunks);
   const topK = opts.topK ?? 6;
   const minScore = opts.minScore ?? 0.2;
   const retrieve = async (q: string): Promise<{ hits: Retrieved[]; mode: 'hybrid' | 'keyword' }> => ({ hits: keywordSearch(idx, q, topK, minScore), mode: 'keyword' });
@@ -99,7 +107,7 @@ export function keywordSearch(idx: KeywordIndex, q: string, topK = 6, minScore =
  * 无 embedding 的块按纯关键词分参与排序。
  */
 export function createHybridRetriever(chunks: Chunk[], embedQuery: (q: string) => Promise<number[]>, opts: RetrieveOptions & { onEmbedError?: (e: unknown) => void } = {}) {
-  const idx = buildKeywordIndex(chunks);
+  const idx = getKeywordIndex(chunks);
   const topK = opts.topK ?? 6;
   const minScore = opts.minScore ?? 0.2;
   return async (q: string): Promise<{ hits: Retrieved[]; mode: 'hybrid' | 'keyword' }> => {

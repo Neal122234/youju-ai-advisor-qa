@@ -23,6 +23,7 @@ export function makeAdapters(over: Partial<Adapters> = {}, chunks = fixtureChunk
 /** 一个"按资料[1]首句作答"的假 LLM，记录收到的消息 */
 export function echoLlm(calls: string[][], transform?: (s: string) => string) {
   return async (msgs: { role: string; content: string }[]) => {
+    if (msgs[0].content.includes('意图分类器')) return '{"category":"education","scope":"whole","reason":"测试","answerable":""}';
     calls.push(msgs.map((m) => m.content));
     const user = msgs[msgs.length - 1].content;
     const m = user.match(/\[1\][^\n]*\n([^\n]+)/);

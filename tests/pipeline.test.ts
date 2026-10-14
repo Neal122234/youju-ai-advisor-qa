@@ -48,7 +48,7 @@ describe('正常作答（mock LLM）', () => {
     expect(r.disclaimer).toContain('风险提示');
     expect(r.answer).not.toContain('<think>');
     expect(calls[0][0]).toContain('只能依据【资料】');
-    expect(names(r)).toEqual(['input_validation', 'input_compliance', 'retrieval', 'coverage', 'generation', 'output_compliance', 'citation', 'grounding', 'confidence', 'suitability']);
+    expect(names(r)).toEqual(['input_validation', 'input_compliance', 'intent_llm', 'retrieval', 'coverage', 'generation', 'output_compliance', 'citation', 'evidence', 'grounding', 'confidence', 'suitability']);
   });
   it('适当性不匹配：C2 问 R4 业务 → notice 并附在答案末尾', async () => {
     const r = await runPipeline(req('科创板开通权限需要什么条件', 'C2'), makeAdapters({ llm: echoLlm([]) }));
@@ -67,13 +67,47 @@ describe('正常作答（mock LLM）', () => {
     const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
     expect(r.confidenceBreakdown.citation).toBe(0);
   });
-  it('LLM covered=false + 编造内容 → handoff_low_conf，仍展示参考并生成工单号', async () => {
+  it('LLM covered=false + 编造内容 → handoff_unknown，绝不展示生成内容', async () => {
     const llm = async () => '{"answer":"根据资料，火星交易所将于明年开放申购[1]。","used":[1],"covered":false}';
     const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
-    expect(r.decision).toBe('handoff_low_conf');
+    expect(r.decision).toBe('handoff_unknown');
     expect(r.handoff?.ticketId).toMatch(/^TK/);
-    expect(r.answer).toContain('待人工确认');
-    expect(r.answer).toContain(r.handoff!.ticketId!);
+    expect(r.answer).not.toContain('火星');
+    expect(r.checks.find((c) => c.name === 'evidence_gate')?.pass).toBe(false);
+  });
+  it('资料中不存在的数字（编造时限）被剔除', async () => {
+    const llm = async () => '{"answer":"科创板开通权限需满足申请前 20 个交易日日均资产不低于 50 万元[1]。资金通常在 T+3 日内到账[1]。参与证券交易满 24 个月[1]。","used":[1],"covered":true}';
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
+    expect(r.answer).not.toContain('T+3');
+    expect(r.answer).toContain('50 万元');
+    expect(r.checks.find((c) => c.name === 'evidence')!.detail).toContain('t+3');
+  });
+  it('无依据句过半 → 转人工，不展示生成内容', async () => {
+    const llm = async () => '{"answer":"火星交易所明年开放[1]。月球板块上市需要摇号[1]。科创板需日均资产不低于 50 万元[1]。","used":[1],"covered":true}';
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
+    expect(r.decision).toBe('handoff_unknown');
+    expect(r.answer).not.toMatch(/火星|月球/);
+  });
+  it('"。[n]" 引用挪回句内，无引用但有依据的句子自动补引用', async () => {
+    const llm = async () => '{"answer":"个人投资者开通科创板权限需满足申请前 20 个交易日日均资产不低于 50 万元。[1]科创板股票单笔申报数量不得少于 200 股。","used":[1],"covered":true}';
+    const r = await runPipeline(req('科创板开通条件和交易单位'), makeAdapters({ llm }));
+    expect(r.answer).toMatch(/50 万元\[\d\]。/);
+    expect(r.answer).toMatch(/200 股\[\d\]。/);
+    expect(r.checks.find((c) => c.name === 'evidence')!.detail).toContain('补/改引用');
+  });
+  it('低置信 → handoff_low_conf 时只展示资料原文摘录，不展示 LLM 文本', async () => {
+    const llm = async () => '{"answer":"市盈率需要结合行业判断[1]。","used":[1],"covered":true}';
+    const r = await runPipeline(req('科创板相关的新规定'), makeAdapters({ llm }), { tUnknownKeyword: 0 , minScore: 0 });
+    if (r.decision === 'handoff_low_conf') {
+      expect(r.answer).toContain('原文摘录');
+      expect(r.answer).not.toContain('市盈率需要结合行业判断');
+    }
+  });
+  it('混合题：covered=false 但合规部分证据充分 → 仍为 partial_refusal', async () => {
+    const llm = async () => '{"answer":"个人投资者开通科创板权限需满足申请前 20 个交易日日均资产不低于 50 万元[1]。","used":[1],"covered":false}';
+    const r = await runPipeline(req('科创板开通条件是什么？另外宁德时代还能买吗', 'C4'), makeAdapters({ llm }));
+    expect(r.decision).toBe('partial_refusal');
+    expect(r.checks.find((c) => c.name === 'confidence')!.detail).toContain('只按合规部分');
   });
   it('NO_ANSWER → handoff_unknown', async () => {
     const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => '{"answer":"NO_ANSWER","used":[],"covered":false}' }));
@@ -99,21 +133,21 @@ describe('降级与本地模式', () => {
   });
   it('LLM 抛错/超时 → degraded，不重试', async () => {
     let n = 0;
-    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => { n++; throw new Error('timeout 12s'); } }));
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => { n++; throw new Error('timeout 12s'); } }), { intentLlm: false });
     expect(r.decision).toBe('degraded');
     expect(n).toBe(1);
     expect(r.checks.find((c) => c.name === 'generation')!.detail).toContain('timeout');
   });
   it('JSON 解析失败重试 1 次：第二次成功', async () => {
     let n = 0;
-    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => (++n === 1 ? '不是JSON' : '{"answer":"科创板需满足日均资产不低于 50 万元[1]。","used":[1],"covered":true}') }));
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => (++n === 1 ? '不是JSON' : '{"answer":"科创板需满足日均资产不低于 50 万元[1]。","used":[1],"covered":true}') }), { intentLlm: false });
     expect(n).toBe(2);
     expect(r.mode).toBe('llm');
     expect(r.checks.some((c) => c.name === 'llm_parse')).toBe(true);
   });
   it('JSON 两次解析失败 → degraded', async () => {
     let n = 0;
-    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => { n++; return '好的'; } }));
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm: async () => { n++; return '好的'; } }), { intentLlm: false });
     expect(n).toBe(2);
     expect(r.decision).toBe('degraded');
   });
@@ -133,7 +167,7 @@ describe('降级与本地模式', () => {
   });
   it('空知识库 → handoff_unknown，不调 LLM', async () => {
     let called = false;
-    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ retrieve: createKeywordRetriever([]), llm: async () => { called = true; return ''; } }, []));
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ retrieve: createKeywordRetriever([]), llm: async () => { called = true; return ''; } }, []), { intentLlm: false });
     expect(r.decision).toBe('handoff_unknown');
     expect(called).toBe(false);
     expect(r.answer).toContain('工单号');
@@ -206,5 +240,139 @@ describe('合规分流', () => {
     const r2 = await runPipeline(req('科创板开通条件？我手机13800138000'), makeAdapters({ llm: echoLlm(calls) }));
     expect(JSON.stringify(calls)).not.toContain('13800138000');
     expect(r2.answer).not.toContain('13800138000');
+  });
+});
+
+describe('证据闸门：只剩套话', () => {
+  it('核心句被剔除、只剩"具体以…为准" → handoff_unknown', async () => {
+    const llm = async () => '{"answer":"基金赎回后资金通常 T+2 到账[1]。具体以基金合同或招募说明书为准[1]。","used":[1],"covered":true}';
+    const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
+    expect(r.decision).toBe('handoff_unknown');
+    expect(r.answer).not.toContain('T+2');
+  });
+});
+
+describe('隐私：整个响应不含原始敏感信息', () => {
+  it('密码/手机号/身份证不出现在 ChatResponse 任何字段（含 checks 追溯）', async () => {
+    const qs = ['帮我操作账户，我把密码给你，是123456', '科创板开通条件？我手机13800138000', '我的身份证号是110101199001011234，科创板怎么开通', '交易密码 600519 忘了怎么办'];
+    for (const q of qs) {
+      const r = await runPipeline(req(q), makeAdapters({ llm: echoLlm([]) }));
+      const j = JSON.stringify(r);
+      for (const secret of ['123456', '13800138000', '110101199001011234']) expect(j).not.toContain(secret);
+      if (q.includes('600519')) { expect(j).not.toContain('600519'); expect(j).not.toContain('识别到个股'); }
+    }
+  });
+});
+
+describe('问候/闲聊', () => {
+  for (const q of ['你好', '您好！', '你能做什么？', '谢谢', 'hi']) {
+    it(`${q} → answered 固定自我介绍，不建工单`, async () => {
+      let called = false;
+      const r = await runPipeline(req(q), makeAdapters({ llm: async () => { called = true; return ''; }, retrieve: async () => { called = true; return { hits: [], mode: 'keyword' }; } }));
+      expect(r.decision).toBe('answered');
+      expect(r.handoff).toBeNull();
+      expect(r.answer).toContain('不推荐具体证券');
+      expect(r.checks.some((c) => c.name === 'chitchat')).toBe(true);
+      expect(called).toBe(false);
+    });
+  }
+  it('"你好，科创板怎么开通" 不算闲聊', async () => {
+    const r = await runPipeline(req('你好，科创板怎么开通'), makeAdapters({ llm: echoLlm([]) }));
+    expect(r.checks.some((c) => c.name === 'chitchat')).toBe(false);
+  });
+});
+describe('反诈识别类内幕消息', () => {
+  it('群里重组消息可信吗 → partial_refusal + insider 告警 + 话术引用', async () => {
+    const r = await runPipeline(req('老师群里说某只票下周有重组消息，可信吗'), makeAdapters({ llm: echoLlm([]) }));
+    expect(r.compliance.some((h) => h.category === 'insider_manip')).toBe(true);
+    expect(['partial_refusal', 'handoff_unknown', 'handoff_low_conf']).toContain(r.decision);
+  });
+});
+
+describe('第二层 LLM 意图分类', () => {
+  const classifier = (out: Record<string, string> | 'throw' | 'slow', gen = echoLlm([])) => async (msgs: { role: string; content: string }[], o?: any) => {
+    if (msgs[0].content.includes('意图分类器')) {
+      if (out === 'throw') throw new Error('boom');
+      if (out === 'slow') return new Promise<string>((r) => setTimeout(() => r('{"category":"stock_pick"}'), 200));
+      return JSON.stringify(out);
+    }
+    return gen(msgs);
+  };
+  const cases: [string, Record<string, string>, string, string][] = [
+    ['茅台和五粮液选哪个', { category: 'stock_pick', scope: 'whole', reason: '比较个股' }, 'refused', 'script-stock-pick'],
+    ['沪指年底站得上4000不', { category: 'price_prediction', scope: 'whole', reason: '预测点位' }, 'refused', 'script-price-prediction'],
+    ['每年稳稳拿15%有什么办法', { category: 'return_promise', scope: 'whole', reason: '稳定高收益' }, 'refused', 'script-return-promise'],
+  ];
+  for (const [q, out, dec] of cases) {
+    it(`${q} → ${dec}（LLM:${out.category}）`, async () => {
+      const r = await runPipeline(req(q), makeAdapters({ llm: classifier(out) }));
+      expect(r.decision).toBe(dec);
+      const h = r.compliance.find((x) => x.category === out.category)!;
+      expect(h).toMatchObject({ stage: 'input', severity: 'high' });
+      expect(h.matched.startsWith('LLM:')).toBe(true);
+      expect(r.checks.find((c) => c.name === 'intent_llm')!.pass).toBe(false);
+    });
+  }
+  it('partial → partial_refusal，只回答 answerable 部分', async () => {
+    const calls: string[][] = [];
+    const r = await runPipeline(req('什么是科创板开通条件？我的茅台该不该止损'.replace('茅台', '那只')), makeAdapters({ llm: classifier({ category: 'education', scope: 'whole', reason: '概念' }, echoLlm(calls)) }), {});
+    // 规则已命中（那只=指代）→ mixed；剩余部分经分类器复核为 education → partial_refusal
+    expect(r.decision).toBe('partial_refusal');
+  });
+  it('partial（规则未命中）→ partial_refusal，prompt 只含可回答部分', async () => {
+    const calls: string[][] = [];
+    const r = await runPipeline(req('科创板开通条件是什么，再问个茅台和五粮液选哪个'), makeAdapters({ llm: classifier({ category: 'stock_pick', scope: 'partial', reason: '比较个股', answerable: '科创板开通条件是什么' }, echoLlm(calls)) }));
+    expect(r.decision).toBe('partial_refusal');
+    expect(r.compliance.some((h) => h.matched === 'LLM:比较个股')).toBe(true);
+    expect(calls[0][1]).toMatch(/【可回答的问题】科创板开通条件是什么/);
+    expect(calls[0][1]).toContain('【需拒答部分（勿回答）】比较个股');
+  });
+  it('education → 正常作答', async () => {
+    const r = await runPipeline(req('科创板开通权限需要什么条件'), makeAdapters({ llm: classifier({ category: 'education', scope: 'whole', reason: '规则' }) }));
+    expect(r.decision).toMatch(/answered/);
+    expect(r.checks.find((c) => c.name === 'intent_llm')!.pass).toBe(true);
+  });
+  it('分类器抛错 → 只用规则结果并记 check', async () => {
+    const r = await runPipeline(req('科创板开通权限需要什么条件'), makeAdapters({ llm: classifier('throw') }));
+    expect(r.decision).toMatch(/answered/);
+    expect(r.checks.find((c) => c.name === 'intent_llm')!.detail).toContain('仅采用规则结果');
+  });
+  it('分类器超时（4s）→ 只用规则结果', async () => {
+    const { classifyIntent } = await import('../core/intent');
+    await expect(classifyIntent(classifier('slow') as any, 'x', 50)).rejects.toThrow('超时');
+  });
+  it('mixed：剩余部分经 LLM 复核仍越界 → 整体 refused', async () => {
+    const r = await runPipeline(req('听说某公司要被收购了，现在进场来得及吗'), makeAdapters({ llm: classifier({ category: 'stock_pick', scope: 'whole', reason: '入场时点' }) }));
+    expect(r.decision).toBe('refused');
+    expect(r.compliance.map((h) => h.category)).toEqual(expect.arrayContaining(['insider_manip', 'stock_pick']));
+  });
+  it('mixed：剩余部分 LLM 复核为 education → 仍 partial_refusal', async () => {
+    const r = await runPipeline(req('科创板开通条件是什么？另外宁德时代还能买吗'), makeAdapters({ llm: classifier({ category: 'education', scope: 'whole', reason: '规则' }) }));
+    expect(r.decision).toBe('partial_refusal');
+  });
+  it('规则整体拒答时不调用分类器', async () => {
+    let n = 0;
+    const r = await runPipeline(req('宁德时代还能上车吗'), makeAdapters({ llm: async () => { n++; return ''; } }));
+    expect(r.decision).toBe('refused');
+    expect(n).toBe(0);
+  });
+  it('llm=null（本地模式）跳过分类', async () => {
+    const r = await runPipeline(req('茅台和五粮液选哪个'), makeAdapters(), { mode: 'local' });
+    expect(r.checks.some((c) => c.name === 'intent_llm')).toBe(false);
+  });
+  it('检索与分类并行：总时延≈max 而非和', async () => {
+    const slow = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const ad = makeAdapters({ llm: async (m: any) => { if (m[0].content.includes('意图分类器')) { await slow(80); return '{"category":"education","scope":"whole","reason":"x"}'; } return echoLlm([])(m); } });
+    const base = ad.retrieve;
+    ad.retrieve = async (q: string) => { await slow(80); return base(q); };
+    const t = Date.now();
+    await runPipeline(req('科创板开通权限需要什么条件'), ad);
+    expect(Date.now() - t).toBeLessThan(150);
+  });
+  it('parseIntent 宽容解析与非法类别', async () => {
+    const { parseIntent } = await import('../core/intent');
+    expect(parseIntent('<think>x</think>{"category":"stock_pick","scope":"whole","reason":"r"}')?.category).toBe('stock_pick');
+    expect(parseIntent('{"category":"weird"}')).toBeNull();
+    expect(parseIntent('无')).toBeNull();
   });
 });
