@@ -109,3 +109,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status, created_at);
+
+-- 全局限流计数（按 IP + 分钟窗口 upsert；过期行定期清理）
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key        TEXT PRIMARY KEY,           -- chat:<ip>:<epochMinute>
+  n          INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL            -- epoch 秒
+);

@@ -265,7 +265,7 @@ describe('隐私：整个响应不含原始敏感信息', () => {
 });
 
 describe('问候/闲聊', () => {
-  for (const q of ['你好', '您好！', '你能做什么？', '谢谢', 'hi']) {
+  for (const q of ['你好', '您好！', '你能做什么？', 'hi']) {
     it(`${q} → answered 固定自我介绍，不建工单`, async () => {
       let called = false;
       const r = await runPipeline(req(q), makeAdapters({ llm: async () => { called = true; return ''; }, retrieve: async () => { called = true; return { hits: [], mode: 'keyword' }; } }));

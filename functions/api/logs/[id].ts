@@ -12,5 +12,5 @@ export const onRequestGet: PagesFunction<Env> = async ({ params, env }) => {
   const { response_json: _omit, ...rest } = row;
   const alerts = await all(env.DB, 'SELECT * FROM alerts WHERE qa_id = ? ORDER BY ts', id);
   const tickets = await all(env.DB, 'SELECT * FROM tickets WHERE qa_id = ?', id);
-  return json({ ...camel(rest), response, responseJson: row.response_json, alerts: alerts.map((a) => camel(a)), tickets: tickets.map((t) => camel(t)) });
+  return json({ ...camel(rest), response, alerts: alerts.map((a) => camel(a)), tickets: tickets.map((t) => camel(t)) });
 };

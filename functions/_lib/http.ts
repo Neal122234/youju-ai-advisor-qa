@@ -55,3 +55,27 @@ export function camel(row: unknown): Record<string, any> {
 }
 export const nowIso = () => new Date().toISOString();
 export const uid = () => crypto.randomUUID();
+
+/**
+ * 全局限流（D1）：key = `${scope}:${ip}:${分钟}`，INSERT … ON CONFLICT DO UPDATE n=n+1 RETURNING n，一条语句完成计数。
+ * 取舍：跨 isolate / 数据中心一致（D1 单主库），代价是每次 chat 多一次 D1 写（约几毫秒）；
+ * 相比 Cache API（各数据中心独立、非原子）更准确，相比 Durable Object 无需额外绑定。
+ * D1 不可用（含 x-fault: db）时返回 null，由调用方放行（fail-open），不影响问答可用性。
+ */
+let rlTableReady = false;
+export async function d1RateLimit(db: D1Database, scope: string, ip: string, limit: number, now = Date.now()): Promise<{ ok: boolean; remaining: number; resetMs: number } | null> {
+  try {
+    const minute = Math.floor(now / 60_000);
+    if (!rlTableReady) {
+      await db.prepare('CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL)').run();
+      rlTableReady = true;
+    }
+    const row = await db.prepare('INSERT INTO rate_limits (key, n, expires_at) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET n = n + 1 RETURNING n')
+      .bind(`${scope}:${ip}:${minute}`, (minute + 2) * 60).first<{ n: number }>();
+    if (Math.random() < 0.02) await db.prepare('DELETE FROM rate_limits WHERE expires_at < ?').bind(Math.floor(now / 1000)).run();
+    const n = row?.n ?? 1;
+    return { ok: n <= limit, remaining: Math.max(0, limit - n), resetMs: (minute + 1) * 60_000 - now };
+  } catch {
+    return null;
+  }
+}

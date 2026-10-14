@@ -1,6 +1,6 @@
 // 引用校验、落地性（grounding）、置信度与分档（SPEC §5 步骤 7–9）、适当性比对（步骤 10）。
 import type { Chunk, Decision, ProductRisk, RiskLevel } from './types';
-import { charBigramSet } from './tokenize';
+import { charBigramSet, financeTermsIn, normalizeText } from './tokenize';
 import { splitSentences } from './chunk';
 
 export const W = { retrieval: 0.35, coverage: 0.25, grounding: 0.25, citation: 0.15 } as const;
@@ -106,29 +106,98 @@ const normNum = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/[，
 
 export interface SentenceEvidence {
   text: string; cited: number[]; overlap: number; best: number; bestOverlap: number;
-  missingNumbers: string[]; supported: boolean;
+  missingNumbers: string[];
+  /** 句中关键术语（领域词、英文缩写）在依据块里找不到 */
+  missingTerms: string[];
+  /** 与依据原句相比，否定/量词发生变化（"部分 ETF"→"ETF"、"不能"→"可以"） */
+  qualifierChange: string | null;
+  supported: boolean;
   /** 所引块不支撑、但其它块高度重合 → 应改引最佳块 */
   recite: boolean;
 }
 export const SENT_SUPPORT = 0.35;   // 句子与资料的字二元组重合率下限
-export const SENT_AUTOCITE = 0.5;   // 无引用句自动补引用的重合率下限
+export const SENT_AUTOCITE = 0.6;   // 无引用句自动补引用的重合率下限（还需无资料外数字/术语、无限定词变化）
 
-/** 逐句核验：重合率（对所引块，无引用则对最佳块）+ 数字核验。不过关的句子视为无依据。 */
-export function sentenceEvidence(answer: string, numbered: Chunk[]): SentenceEvidence[] {
+/** 泛化词不参与"关键术语"核验（几乎每段资料都会出现或可自然转述） */
+const GENERIC_TERMS = new Set(['风险', '收益', '投资者', '本金', '亏损', '账户', '资产', '开通', '权限', '门槛', '交易日', '委托', '成交', '申报', '投教',
+  '投资者教育', '理财', '证券账户', '资金账户', '交易所', '基金', '股票', '市值', '新股', '分红', '波动', '流动性', '杠杆', '手续费', '佣金', '密码']);
+// 量词只在修饰对象时计（"部分 ETF""所有投资者"），"超过部分可按 1 股递增"里的"部分"不算
+const QUANT_RE = /(部分|个别|某些|一些|多数|大部分|大多数|少数|全部|所有|一律|仅|只有)(?=\s*[\u4e00-\u9fa5a-z]{0,4}?(etf|lof|基金|品种|股票|证券|产品|券商|投资者|债券|公司|板块|情况|交易|个股|账户|客户|业务))/gi;
+const NEG_RE = /(不能|不可以|不可|不得|不允许|不会|不是|不需要|不用|不再|不予|无需|无法|禁止|没有|未|勿)/;
+
+function keyTerms(sentence: string): string[] {
+  const t = normalizeText(sentence.replace(/\[\d+\]/g, ''));
+  const dict = financeTermsIn(t).filter((w) => !GENERIC_TERMS.has(w));
+  // 去掉被更长词包含的短词（"科创板"已含"科创"）
+  const terms = dict.filter((w) => !dict.some((o) => o !== w && o.includes(w)));
+  const ascii = t.match(/[a-z][a-z0-9+*]{1,}/g) ?? [];
+  return [...new Set([...terms, ...ascii])];
+}
+
+/** 逐句核验：重合率 + 数字核验 + 关键术语核验 + 否定/量词变化核验。任一不过关视为无依据。 */
+/** 常见同义/简称（核验术语时，原文出现任一写法即算覆盖） */
+const SYNONYMS: Record<string, string[]> = {
+  两融: ['融资融券'], 融资融券: ['两融'], 爆仓: ['强制平仓', '平仓'], 货币基金: ['货币市场基金', '货币型'], 债券基金: ['债券型基金', '纯债', '债基'],
+  股票型基金: ['股票基金'], 混合型基金: ['混合基金'], 开户: ['开立', '开通'], 销户: ['注销'], 转户: ['转托管'], etf: ['交易型开放式指数基金'],
+  lof: ['上市型开放式基金'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
+};
+/** 问题里出现的术语：答案复述它们不算编造，前提是句子与依据块高度重合（≥ 0.6） */
+const QUESTION_TERM_MIN_OVERLAP = 0.6;
+
+export function sentenceEvidence(answer: string, numbered: Chunk[], question = ''): SentenceEvidence[] {
+  const qNorm = normNum(normalizeText(question));
   const sets = numbered.map((c) => charBigramSet(`${c.heading}${c.text}`));
   const raw = numbered.map((c) => normNum(`${c.docTitle}${c.heading}${c.text}`));
+  // 按分句（逗号级）比较，避免一整句里别的分句的否定/量词干扰
+  const srcSents = numbered.map((c) => splitSentences(c.text).flatMap((x) => x.split(/[，,；;：:]/)).filter((x) => x.length >= 4).map((x) => ({ x, b: charBigramSet(x) })));
   const out: SentenceEvidence[] = [];
   for (const s of factualSentences(answer)) {
-    const sb = charBigramSet(s.replace(/\[\d+\]/g, ''));
+    const plain = s.replace(/\[\d+\]/g, '');
+    const sb = charBigramSet(plain);
     const ov = (i: number) => { if (!sb.size) return 0; let n = 0; for (const b of sb) if (sets[i].has(b)) n++; return n / sb.size; };
     const cited = [...new Set(extractCitations(s))].filter((n) => n >= 1 && n <= numbered.length);
     let best = 0; let bestOverlap = 0;
     numbered.forEach((_, i) => { const o = ov(i); if (o > bestOverlap) { bestOverlap = o; best = i + 1; } });
     const overlap = cited.length ? Math.max(...cited.map((n) => ov(n - 1))) : bestOverlap;
-    const pool = cited.length ? cited.map((n) => raw[n - 1]).join('') : raw.join('');
-    const missingNumbers = numericFacts(s).filter((x) => !pool.includes(normNum(x)) && !raw.join('').includes(normNum(x)));
     const recite = cited.length > 0 && overlap < SENT_SUPPORT && bestOverlap >= SENT_AUTOCITE;
-    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, recite, supported: (overlap >= SENT_SUPPORT || recite) && missingNumbers.length === 0 });
+    // 依据块：所引块（若支撑）否则最佳块
+    const support = cited.length && !recite ? cited : best ? [best] : [];
+    const pool = support.map((n) => raw[n - 1]).join('');
+    const missingNumbers = numericFacts(s).filter((x) => !pool.includes(normNum(x)) && !raw.join('').includes(normNum(x)));
+    const supOverlap = support.length ? Math.max(...support.map((n) => ov(n - 1))) : 0;
+    const missingTerms = keyTerms(plain).filter((w) => {
+      if (pool.includes(normNum(w)) || (SYNONYMS[w] ?? []).some((x) => pool.includes(normNum(x)))) return false;
+      if (qNorm.includes(normNum(w)) && supOverlap >= QUESTION_TERM_MIN_OVERLAP) return false;
+      return true;
+    });
+    let qualifierChange: string | null = null;
+    // 答案逐分句与最相近的依据分句比较否定/量词
+    for (const clause of plain.split(/[，,；;：:]/).filter((x) => x.replace(/[^\u3400-\u9fffA-Za-z0-9]/g, '').length >= 4)) {
+      const cb = charBigramSet(clause);
+      let cs = ''; let co = 0;
+      for (const n of support) for (const ss of srcSents[n - 1]) {
+        let k = 0; for (const b of cb) if (ss.b.has(b)) k++;
+        const o = cb.size ? k / cb.size : 0; if (o > co) { co = o; cs = ss.x; }
+      }
+      if (!cs || co < 0.6) continue;
+      const qs = new Set((cs.match(QUANT_RE) ?? []).map((x) => x.toLowerCase())); const qa = new Set((clause.match(QUANT_RE) ?? []).map((x) => x.toLowerCase()));
+      const lost = [...qs].filter((x) => !qa.has(x)); const added = [...qa].filter((x) => !qs.has(x));
+      if (lost.length || added.length) { qualifierChange = `量词${lost.length ? `缺失"${lost.join('/')}"` : ''}${added.length ? `新增"${added.join('/')}"` : ''}（原文：${cs.slice(0, 20)}）`; break; }
+      if (NEG_RE.test(cs) !== NEG_RE.test(clause)) { qualifierChange = `否定词与原文不一致（原文：${cs.slice(0, 20)}）`; break; }
+    }
+    // 动作级否定翻转："原文 不能撤单 ↔ 答案 可以撤单"（及反向）
+    if (!qualifierChange) {
+      const poolText = support.map((n) => normalizeText(numbered[n - 1].text)).join('');
+      const negAct = [...poolText.matchAll(/(不能|不可以|不得|不允许|禁止|无法|不可|不支持)([\u4e00-\u9fa5]{2})/g)].map((m) => m[2]);
+      const posAct = [...poolText.matchAll(/(?<!不)(可以|可|能|允许|支持)([\u4e00-\u9fa5]{2})/g)].map((m) => m[2]);
+      const ap = normalizeText(plain);
+      const flipPos = negAct.find((v) => !posAct.includes(v) && new RegExp(`(?<!不)(可以|可|能|允许|支持)${v}`).test(ap) && !new RegExp(`(不能|不可以|不得|不允许|禁止|无法|不可|不支持)${v}`).test(ap));
+      const flipNeg = posAct.find((v) => new RegExp(`(不能|不可以|不得|不允许|禁止|无法|不可|不支持)${v}`).test(ap) && !negAct.includes(v));
+      if (flipPos) qualifierChange = `否定词与原文不一致（原文：不能/不得${flipPos}）`;
+      else if (flipNeg) qualifierChange = `否定词与原文不一致（原文：可以${flipNeg}）`;
+    }
+    const supported = (overlap >= SENT_SUPPORT || recite) && !missingNumbers.length && !missingTerms.length && !qualifierChange;
+    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, missingTerms, qualifierChange, recite, supported });
   }
   return out;
 }

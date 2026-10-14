@@ -1,49 +1,72 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { AnswerText, Breakdown, DecisionTag, Empty, ErrorBox, Icon, Loading, go, useAsync } from '../ui/kit';
+import { AnswerText, Breakdown, Crumbs, DecisionTag, Empty, ErrorBox, Icon, Loading, Pager, TableSkeleton, go, lastListHref, rememberListPos, useAsync, useHashState, useRestoreListPos, useTable } from '../ui/kit';
 import { CATEGORY_LABEL, CHECK_LABEL, DECISIONS, DECISION_LABEL, MODE_LABEL, SEVERITY_LABEL, STAGE_LABEL, fmtTime } from '../ui/labels';
 import { PageHead } from './OpsApp';
 
-export function LogsPage({ query }: { query: URLSearchParams }) {
-  const [decision, setDecision] = useState(query.get('decision') ?? '');
-  const [q, setQ] = useState(query.get('q') ?? '');
+export function SearchBox({ value, onChange, placeholder, label = '搜索' }: { value: string; onChange: (v: string) => void; placeholder: string; label?: string }) {
+  return (
+    <div className="search">
+      <Icon name="search" size={15} />
+      <input className="input" data-search value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape' && value) { e.stopPropagation(); onChange(''); } }} placeholder={placeholder} aria-label={label} />
+      {!value && <span className="kbd" aria-hidden="true">/</span>}
+    </div>
+  );
+}
+
+const LIST_KEY = 'logs';
+export function LogsPage({ query: _q }: { query: URLSearchParams }) {
+  const [decision, setDecision] = useHashState('decision');
+  const [q, setQ] = useHashState('q');
   const [qDeb, setQDeb] = useState(q);
   useEffect(() => { const t = setTimeout(() => setQDeb(q), 300); return () => clearTimeout(t); }, [q]);
   const { data, error, loading, reload } = useAsync(() => api.logs({ decision, q: qDeb, limit: 200 }), [decision, qDeb]);
+  const t = useTable(data ?? [], {
+    ts: (l) => l.ts, confidence: (l) => l.confidence, latency: (l) => l.latencyMs, risk: (l) => l.userRisk,
+  }, { defaultSort: 'ts', defaultDir: 'desc' });
+  useRestoreListPos(LIST_KEY, !!data);
+  const open = (id: string) => { rememberListPos(LIST_KEY); go(`/ops/logs/${encodeURIComponent(id)}`); };
 
   return (
     <div className="page">
-      <PageHead title="问答追溯" desc="每次回答的决策、置信度、合规命中与检索过程" actions={<button className="btn sm" onClick={reload}><Icon name="refresh" size={14} /> 刷新</button>} />
+      <PageHead title="问答追溯" desc="每次回答的决策、置信度、合规命中与检索过程" actions={<button className="btn sm" onClick={reload} disabled={loading}><Icon name="refresh" size={14} /> 刷新</button>} />
       <div className="filters">
-        <select className="input" value={decision} onChange={(e) => setDecision(e.target.value)} aria-label="按决策筛选">
+        <SearchBox value={q} onChange={(v) => { setQ(v); t.resetPage(); }} placeholder="搜索问题或日志 ID" />
+        <select className="input" value={decision} onChange={(e) => { setDecision(e.target.value); t.resetPage(); }} aria-label="按决策筛选">
           <option value="">全部决策</option>
           {DECISIONS.map((d) => <option key={d} value={d}>{DECISION_LABEL[d]}</option>)}
         </select>
-        <input className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索问题或日志 ID" aria-label="搜索" />
+        {(decision || q) && <button className="btn sm ghost" onClick={() => { setDecision(''); setQ(''); t.resetPage(); }}>清除筛选</button>}
+        {data && <span className="filter-n num">{data.length} 条</span>}
       </div>
-      {error ? <ErrorBox msg={error} onRetry={reload} /> : loading && !data ? <Loading rows={8} /> : !data?.length ? (
-        <Empty title="没有匹配的问答">去用户端提一个问题，这里会出现完整追溯。<br /><a href="#/app">打开用户端</a></Empty>
+      {error ? <ErrorBox msg={error} onRetry={reload} /> : loading && !data ? <TableSkeleton cols={8} /> : !data?.length ? (
+        decision || q
+          ? <Empty title="没有匹配的问答">换个关键词，或<button className="linkish" onClick={() => { setDecision(''); setQ(''); }}>清除筛选</button>。</Empty>
+          : <Empty title="还没有问答记录">在用户端提一个问题，这里会出现完整追溯。<br /><a href="#/app">打开用户端</a></Empty>
       ) : (
-        <div className="tbl-wrap">
-          <table className="tbl clickable">
-            <thead><tr><th>时间</th><th>问题</th><th>决策</th><th className="r">置信度</th><th>等级</th><th>模式</th><th>版本</th><th className="r">耗时</th><th>反馈</th></tr></thead>
-            <tbody>
-              {data.map((l) => (
-                <tr key={l.id} onClick={() => go(`/ops/logs/${encodeURIComponent(l.id)}`)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && go(`/ops/logs/${encodeURIComponent(l.id)}`)}>
-                  <td className="nowrap muted num">{fmtTime(l.ts)}</td>
-                  <td className="q-cell">{l.question}</td>
-                  <td><DecisionTag d={l.decision} compact /></td>
-                  <td className="num r">{l.confidence.toFixed(2)}</td>
-                  <td className="num">{l.userRisk}</td>
-                  <td className="nowrap">{MODE_LABEL[l.mode] ?? l.mode}</td>
-                  <td className="num">{l.kbRelease}</td>
-                  <td className="num r nowrap">{l.latencyMs} ms</td>
-                  <td>{l.feedback === 1 ? <span className="pill tone-green">有用</span> : l.feedback === -1 ? <span className="pill tone-red" title={l.feedbackNote ?? ''}>差评</span> : <span className="muted">—</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="tbl-wrap">
+            <table className="tbl clickable">
+              <thead><tr>{t.th('ts', '时间')}<th>问题</th><th>决策</th>{t.th('confidence', '置信度', 'r')}{t.th('risk', '等级')}<th>模式</th><th>版本</th>{t.th('latency', '耗时', 'r')}<th>反馈</th></tr></thead>
+              <tbody>
+                {t.view.map((l) => (
+                  <tr key={l.id} onClick={() => open(l.id)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && open(l.id)}>
+                    <td className="nowrap muted num">{fmtTime(l.ts)}</td>
+                    <td className="q-cell">{l.question}</td>
+                    <td><DecisionTag d={l.decision} compact /></td>
+                    <td className="num r">{l.confidence.toFixed(2)}</td>
+                    <td className="num">{l.userRisk}</td>
+                    <td className="nowrap muted">{MODE_LABEL[l.mode] ?? l.mode}</td>
+                    <td className="num muted">{l.kbRelease}</td>
+                    <td className="num r nowrap muted">{l.latencyMs} ms</td>
+                    <td>{l.feedback === 1 ? <span className="pill tone-green">有用</span> : l.feedback === -1 ? <span className="pill tone-red" title={l.feedbackNote ?? ''}>差评</span> : <span className="muted">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={t.page} pages={t.pages} total={t.total} size={t.size} onPage={(n) => { t.setPage(n); document.querySelector('.ops-main')?.scrollTo({ top: 0 }); }} />
+        </>
       )}
     </div>
   );
@@ -52,7 +75,7 @@ export function LogsPage({ query }: { query: URLSearchParams }) {
 export function LogDetailPage({ id }: { id: string }) {
   const { data: l, error, loading, reload } = useAsync(() => api.log(id), [id]);
   const [cite, setCite] = useState<number | null>(null);
-  const back = <a className="back" href="#/ops/logs"><Icon name="arrowLeft" size={14} /> 问答追溯</a>;
+  const back = <Crumbs items={[{ label: '问答追溯', href: lastListHref(LIST_KEY, '#/ops/logs') }, { label: id }]} />;
   if (error) return <div className="page">{back}<ErrorBox msg={error} onRetry={reload} /></div>;
   if (loading || !l) return <div className="page">{back}<Loading rows={8} /></div>;
   const r = l.response;
@@ -72,7 +95,7 @@ export function LogDetailPage({ id }: { id: string }) {
         <div className="col">
           <section className="panel">
             <h3>回答</h3>
-            <AnswerText text={l.answer || r?.answer || ''} onCite={(n) => setCite((c) => (c === n ? null : n))} active={cite} />
+            <AnswerText text={l.answer || r?.answer || ''} citations={r?.citations} onCite={(n) => setCite((c) => (c === n ? null : n))} active={cite} />
             {r?.suitability && <div className={`notice ${r.suitability.matched ? 'tone-green' : 'tone-orange'}`}><b>适当性</b><span>{r.suitability.notice}</span></div>}
             {r?.handoff && <div className="notice tone-blue"><b>转人工</b><span>{r.handoff.reason}{r.handoff.ticketId && <>，工单 <a href={`#/ops/tickets?id=${encodeURIComponent(r.handoff.ticketId)}`}><code>{r.handoff.ticketId}</code></a></>}</span></div>}
             {r?.disclaimer && <p className="disclaimer">{r.disclaimer}</p>}

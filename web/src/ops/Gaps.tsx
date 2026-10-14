@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { DocDetail, Gap, GapVerifyResult } from '../apiTypes';
-import { DecisionTag, Empty, ErrorBox, Icon, Loading, go, toast, useAsync } from '../ui/kit';
+import { DecisionTag, Empty, ErrorBox, Icon, Loading, confirmDialog, go, toast, useAsync, useHashState } from '../ui/kit';
 import { GAP_STATUS_LABEL, GAP_TYPE_LABEL, fmtTime } from '../ui/labels';
 import { PageHead } from './OpsApp';
 
 const STATUS_TONE: Record<string, string> = { open: 'orange', drafting: 'yellow', resolved: 'green', ignored: 'gray' };
 
 export function GapsPage({ query }: { query: URLSearchParams }) {
-  const [status, setStatus] = useState(query.get('status') ?? '');
-  const [type, setType] = useState('');
-  const [sel, setSel] = useState<string | null>(query.get('id'));
+  void query;
+  const [status, setStatus] = useHashState('status');
+  const [type, setType] = useHashState('type');
+  const [selQ, setSelQ] = useHashState('id');
+  const sel = selQ || null;
+  const setSel = (v: string | null) => setSelQ(v ?? '');
   const { data, error, loading, reload } = useAsync(() => api.gaps(status || undefined), [status]);
   const list = (data ?? []).filter((g) => !type || g.type === type);
   const gap = list.find((g) => g.id === sel) ?? (data ?? []).find((g) => g.id === sel) ?? null;
@@ -30,7 +33,7 @@ export function GapsPage({ query }: { query: URLSearchParams }) {
         </select>
       </div>
       {error ? <ErrorBox msg={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : !list.length ? (
-        <Empty title="没有缺口">用户端问一个知识库没覆盖的问题（如港股通交易时间），会在这里生成缺口。</Empty>
+        <Empty art="inbox" title={status || type ? '没有符合条件的缺口' : '没有知识缺口'}>用户问到知识库未覆盖的问题、低置信回答或差评时，会在这里归并成缺口。</Empty>
       ) : (
         <div className="master-detail">
           <div className="md-list">
@@ -87,8 +90,10 @@ function GapDetail({ gap, onChanged, onClose }: { gap: Gap; onChanged: () => voi
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   async function ignore() {
+    const ok = await confirmDialog({ title: '忽略这个缺口？', body: `「${gap.sampleQuestion}」等 ${gap.questions.length} 种问法将不再提示补充知识，之后同类问题仍会转人工。`, confirmText: '忽略缺口' });
+    if (!ok) return;
     setBusy(true);
-    try { await api.gapAction(gap.id, 'ignore'); toast('已忽略'); onChanged(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    try { await api.gapAction(gap.id, 'ignore'); toast('缺口已忽略'); onChanged(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   async function runVerify() {
     setBusy(true); setErr(null);

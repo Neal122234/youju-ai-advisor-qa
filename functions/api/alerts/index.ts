@@ -9,7 +9,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const status = u.searchParams.get('status'); const cat = u.searchParams.get('category');
   if (status) { where.push('status = ?'); args.push(status); }
   if (cat) { where.push('category = ?'); args.push(cat); }
-  const limit = Math.min(500, Number(u.searchParams.get('limit')) || 200);
+  const limit = Math.min(500, Math.max(1, Math.floor(Number(u.searchParams.get('limit'))) || 200));
   const rows = await all(env.DB, `SELECT * FROM alerts ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ts DESC LIMIT ?`, ...args, limit);
   return json({ items: rows.map((r) => camel(r)) });
 };

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Ticket, TicketStatus } from '../apiTypes';
-import { Empty, ErrorBox, Icon, Loading, toast, useAsync } from '../ui/kit';
+import { Empty, ErrorBox, Icon, Loading, confirmDialog, toast, useAsync, useHashState } from '../ui/kit';
 import { TICKET_STATUS_LABEL, fmtTime } from '../ui/labels';
 import { PageHead } from './OpsApp';
 
@@ -9,8 +9,11 @@ const TONE: Record<string, string> = { pending: 'orange', processing: 'blue', cl
 const FLOW: TicketStatus[] = ['pending', 'processing', 'closed'];
 
 export function TicketsPage({ query }: { query: URLSearchParams }) {
-  const [filter, setFilter] = useState('');
-  const [sel, setSel] = useState<string | null>(query.get('id'));
+  void query;
+  const [filter, setFilter] = useHashState('status');
+  const [selQ, setSelQ] = useHashState('id');
+  const sel = selQ || null;
+  const setSel = (v: string | null) => setSelQ(v ?? '');
   const { data, error, loading, reload } = useAsync(() => api.tickets(), []);
   const list = (data ?? []).filter((t) => !filter || t.status === filter);
   const t = (data ?? []).find((x) => x.id === sel) ?? null;
@@ -28,7 +31,7 @@ export function TicketsPage({ query }: { query: URLSearchParams }) {
         </div>
       </div>
       {error ? <ErrorBox msg={error} onRetry={reload} /> : loading && !data ? <Loading rows={6} /> : !list.length ? (
-        <Empty title="没有工单">用户端说「转人工」或问知识库未覆盖的问题会生成工单。</Empty>
+        <Empty art="inbox" title={filter ? '没有该状态的工单' : '没有工单'}>用户要求人工，或问到知识库未覆盖的问题时，会在这里生成工单。</Empty>
       ) : (
         <div className="master-detail">
           <div className="md-list">
@@ -54,8 +57,9 @@ function TicketDetail({ t, onSaved, onClose }: { t: Ticket; onSaved: () => void;
   const [reply, setReply] = useState(t.reply ?? '');
   const [busy, setBusy] = useState(false);
   async function save(status: TicketStatus) {
+    if (status === 'closed' && !(await confirmDialog({ title: '回复并关闭工单？', body: '回复内容会通过 App 消息发送给用户，工单关闭后不可再编辑回复（可重新打开）。', confirmText: '回复并关闭' }))) return;
     setBusy(true);
-    try { await api.updateTicket(t.id, { status, reply }); toast(`工单已${status === 'closed' ? '关闭' : status === 'processing' ? '接单' : '保存'}`, 'green'); onSaved(); }
+    try { await api.updateTicket(t.id, { status, reply }); toast(status === 'closed' ? '已回复并关闭工单' : status === 'processing' && t.status !== 'processing' ? (t.status === 'closed' ? '工单已重新打开' : '已接单') : '回复已保存', 'green'); onSaved(); }
     catch (e: any) { toast('保存失败：' + e.message, 'red'); } finally { setBusy(false); }
   }
   const idx = FLOW.indexOf(t.status);

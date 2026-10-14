@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { DocDetail, DocVersion, KbDoc, PreviewChunk, ProductRisk } from '../apiTypes';
-import { Empty, ErrorBox, Icon, Loading, Modal, go, toast, useAsync } from '../ui/kit';
+import { Crumbs, Empty, ErrorBox, Icon, Loading, Modal, Pager, TableSkeleton, confirmDialog, go, lastListHref, rememberListPos, toast, useAsync, useHashState, useRestoreListPos, useTable } from '../ui/kit';
+import { SearchBox } from './Logs';
 import { DOC_CATEGORY_LABEL, VERSION_STATUS_LABEL, fmtTime } from '../ui/labels';
 import { lineDiff } from './diff';
 import { PageHead } from './OpsApp';
@@ -27,9 +28,12 @@ function KbHome({ tab }: { tab: 'docs' | 'releases' }) {
   const [pub, setPub] = useState(false);
   const docs = useAsync(() => api.docs(), []);
   const rels = useAsync(() => api.releases(), []);
-  const [q, setQ] = useState('');
-  const [cat, setCat] = useState('');
+  const [q, setQ] = useHashState('q');
+  const [cat, setCat] = useHashState('cat');
   const list = (docs.data ?? []).filter((d) => (!cat || d.category === cat) && (!q || d.title.includes(q) || d.docKey.includes(q) || d.tags.some((t) => t.includes(q))));
+  const t = useTable(list, { title: (d) => d.title, cat: (d) => d.category, chunks: (d) => d.chunks, updated: (d) => d.updatedAt, version: (d) => d.currentVersion ?? -1 }, { defaultSort: 'updated' });
+  useRestoreListPos('kb', !!docs.data);
+  const open = (k: string) => { rememberListPos('kb'); go(`/ops/kb/doc/${encodeURIComponent(k)}`); };
   const current = rels.data?.[0]?.releaseNo;
   return (
     <div className="page">
@@ -42,24 +46,28 @@ function KbHome({ tab }: { tab: 'docs' | 'releases' }) {
       {tab === 'docs' ? (
         <>
           <div className="filters">
-            <select className="input" value={cat} onChange={(e) => setCat(e.target.value)} aria-label="类别">
+            <SearchBox value={q} onChange={(v) => { setQ(v); t.resetPage(); }} placeholder="搜索标题、doc_key 或标签" label="搜索文档" />
+            <select className="input" value={cat} onChange={(e) => { setCat(e.target.value); t.resetPage(); }} aria-label="类别">
               <option value="">全部类别</option>
               {Object.entries(DOC_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
-            <input className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索标题、doc_key 或标签" aria-label="搜索文档" />
+            {docs.data && <span className="filter-n num">{list.length} 篇</span>}
           </div>
-          {docs.error ? <ErrorBox msg={docs.error} onRetry={docs.reload} /> : docs.loading && !docs.data ? <Loading rows={8} /> : !list.length ? <Empty title="没有文档" /> : (
+          {docs.error ? <ErrorBox msg={docs.error} onRetry={docs.reload} /> : docs.loading && !docs.data ? <TableSkeleton cols={7} /> : !list.length ? (
+            <Empty art="doc" title={q || cat ? '没有匹配的文档' : '知识库还没有文档'}>{q || cat ? '换个关键词或类别试试。' : <a href="#/ops/kb/new">新建第一篇文档</a>}</Empty>
+          ) : (
+            <>
             <div className="tbl-wrap">
               <table className="tbl clickable">
-                <thead><tr><th>标题</th><th>类别</th><th>当前版本</th><th className="r">块数</th><th>产品风险</th><th>标签</th><th>最近修改</th></tr></thead>
+                <thead><tr>{t.th('title', '标题')}{t.th('cat', '类别')}{t.th('version', '当前版本')}{t.th('chunks', '块数', 'r')}<th>产品风险</th><th>标签</th>{t.th('updated', '最近修改')}</tr></thead>
                 <tbody>
-                  {list.map((d) => (
-                    <tr key={d.docKey} tabIndex={0} onClick={() => go(`/ops/kb/doc/${encodeURIComponent(d.docKey)}`)} onKeyDown={(e) => e.key === 'Enter' && go(`/ops/kb/doc/${encodeURIComponent(d.docKey)}`)}>
-                      <td><div>{d.title}</div><div className="muted small num">{d.docKey}</div></td>
+                  {t.view.map((d) => (
+                    <tr key={d.docKey} tabIndex={0} onClick={() => open(d.docKey)} onKeyDown={(e) => e.key === 'Enter' && open(d.docKey)}>
+                      <td><div>{d.title}</div><div className="id-cell">{d.docKey}</div></td>
                       <td className="nowrap">{DOC_CATEGORY_LABEL[d.category] ?? d.category}</td>
                       <td className="nowrap">{d.currentVersion !== null ? <span className="num">v{d.currentVersion}</span> : <span className="muted">未发布</span>}{d.draftCount > 0 && <span className="pill tone-yellow">草稿 {d.draftCount}</span>}</td>
                       <td className="num r">{d.chunks}</td>
-                      <td>{d.productRisk ? <span className="pill tone-orange">{d.productRisk}</span> : <span className="muted">—</span>}</td>
+                      <td className="num">{d.productRisk ?? <span className="muted">—</span>}</td>
                       <td className="tags">{d.tags.slice(0, 3).map((t) => <span key={t} className="tag">{t}</span>)}</td>
                       <td className="nowrap muted num">{fmtTime(d.updatedAt)}</td>
                     </tr>
@@ -67,6 +75,8 @@ function KbHome({ tab }: { tab: 'docs' | 'releases' }) {
                 </tbody>
               </table>
             </div>
+            <Pager page={t.page} pages={t.pages} total={t.total} size={t.size} onPage={t.setPage} />
+            </>
           )}
         </>
       ) : (
@@ -95,6 +105,7 @@ export function PublishModal({ onClose, onDone, preselect, gapId }: { onClose: (
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
   useEffect(() => {
     (async () => {
       const docs = await api.docs();
@@ -114,12 +125,30 @@ export function PublishModal({ onClose, onDone, preselect, gapId }: { onClose: (
       onDone(r.releaseNo);
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
+  const chosen = (drafts ?? []).filter((v) => sel.has(v.id));
   return (
-    <Modal title="发布草稿" onClose={onClose}>
+    <Modal
+      title={confirm ? '确认发布' : '发布草稿'}
+      onClose={onClose}
+      footer={confirm ? <>
+        <button className="btn" onClick={() => setConfirm(false)} disabled={busy}>返回修改</button>
+        <button className="btn primary" disabled={busy} onClick={submit}>{busy ? '发布中…' : '确认发布'}</button>
+      </> : <>
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn primary" disabled={!sel.size || !drafts?.length} onClick={() => setConfirm(true)}>发布 {sel.size} 个版本</button>
+      </>}
+    >
       {err && <ErrorBox msg={err} />}
-      {!drafts ? <Loading rows={3} /> : !drafts.length ? <Empty title="没有待发布的草稿">先在文档里编辑并保存草稿。</Empty> : (
+      {confirm ? (
+        <div className="pub-confirm">
+          <b>发布后立即对用户生效</b>
+          <span>将切分并写入以下 {chosen.length} 个文档版本，生成新的知识版本；同文档的旧版本自动归档，可在文档详情中回滚。</span>
+          <ul className="qlist">{chosen.map((v) => <li key={v.id}>{v.title} <span className="num">v{v.version}</span></li>)}</ul>
+          {note && <span className="muted">发布说明：{note}</span>}
+        </div>
+      ) : !drafts ? <Loading rows={3} /> : !drafts.length ? <Empty compact title="没有待发布的草稿">先在文档里编辑并保存草稿。</Empty> : (
         <>
-          <p className="muted small">选中的草稿会被切分、写入知识块，并生成一个新的知识版本；同文档的旧版本自动归档。</p>
+          <p className="muted small">选中的草稿会被切分、写入知识块，并生成一个新的知识版本。</p>
           <ul className="checklist">
             {drafts.map((v) => (
               <li key={v.id}>
@@ -130,13 +159,9 @@ export function PublishModal({ onClose, onDone, preselect, gapId }: { onClose: (
               </li>
             ))}
           </ul>
-          <label className="field"><span>发布说明</span><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：补充港股通交易时间" /></label>
+          <label className="field"><span>发布说明</span><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：补充基金赎回到账时间" /></label>
         </>
       )}
-      <div className="row-end">
-        <button className="btn" onClick={onClose}>取消</button>
-        <button className="btn primary" disabled={busy || !sel.size} onClick={submit}>{busy ? '发布中…' : `发布 ${sel.size} 个版本`}</button>
-      </div>
     </Modal>
   );
 }
@@ -157,7 +182,7 @@ function DocPage({ docKey }: { docKey: string }) {
       setDiffA((a) => a || (vs[1] ?? vs[0]).id);
     }
   }, [data]);
-  const back = <a className="back" href="#/ops/kb"><Icon name="arrowLeft" size={14} /> 知识库</a>;
+  const back = <Crumbs items={[{ label: '知识库', href: lastListHref('kb', '#/ops/kb') }, { label: data?.doc.title ?? docKey }]} />;
   if (error) return <div className="page">{back}<ErrorBox msg={error} onRetry={reload} /></div>;
   if (loading && !data) return <div className="page">{back}<Loading rows={8} /></div>;
   if (!data) return null;
@@ -166,7 +191,8 @@ function DocPage({ docKey }: { docKey: string }) {
   const A = versions.find((v) => v.id === diffA), B = versions.find((v) => v.id === diffB);
 
   async function rollback(v: DocVersion) {
-    if (!confirm(`以 v${v.version} 的内容重新发布 ${doc.title}？会生成一个新的知识版本。`)) return;
+    const ok = await confirmDialog({ title: `回滚到 v${v.version}？`, body: `将以 v${v.version} 的内容重新发布「${doc.title}」，生成一个新的知识版本并立即对用户生效；当前版本会被归档，可再次回滚。`, confirmText: '确认回滚', danger: true });
+    if (!ok) return;
     setBusy(true);
     try { const r = await api.rollback(doc.docKey, v.version); toast(`已回滚，新版本 ${r.releaseNo}`, 'green'); reload(); }
     catch (e: any) { toast('回滚失败：' + e.message, 'red'); } finally { setBusy(false); }
@@ -295,7 +321,11 @@ function Editor({ query }: { query: URLSearchParams }) {
     } catch (e: any) { toast('保存失败：' + e.message, 'red'); } finally { setBusy(false); }
   }
 
-  const back = <a className="back" href={docKeyQ ? `#/ops/kb/doc/${encodeURIComponent(docKeyQ)}` : gapId ? '#/ops/gaps' : '#/ops/kb'}><Icon name="arrowLeft" size={14} /> {docKeyQ ? '文档详情' : gapId ? '知识缺口' : '知识库'}</a>;
+  const back = <Crumbs items={[
+    gapId ? { label: '知识缺口', href: `#/ops/gaps?id=${encodeURIComponent(gapId)}` } : { label: '知识库', href: lastListHref('kb', '#/ops/kb') },
+    ...(docKeyQ ? [{ label: detail?.doc.title ?? docKeyQ, href: `#/ops/kb/doc/${encodeURIComponent(docKeyQ)}` }] : []),
+    { label: isNew ? '新建文档' : '编辑' },
+  ]} />;
   if (loading) return <div className="page">{back}<Loading rows={8} /></div>;
   const flowStep = published ? 3 : saved ? 2 : 1;
 

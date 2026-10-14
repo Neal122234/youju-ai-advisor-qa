@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import type { EvalRun } from '../apiTypes';
-import { DecisionTag, Empty, ErrorBox, Icon } from '../ui/kit';
+import { DecisionTag, Empty, ErrorBox, Icon, Pager, useTable } from '../ui/kit';
 import { CATEGORY_LABEL, DECISION_LABEL, EVAL_TYPE_LABEL, pct } from '../ui/labels';
 import { PageHead } from './OpsApp';
 
@@ -31,6 +31,7 @@ export function EvalPage() {
 
   const rows = (run?.results ?? []).filter((r) => (!onlyFail || !r.pass) && (!type || r.type === type));
   const fails = run?.results.filter((r) => !r.pass) ?? [];
+  const t = useTable(rows, { id: (r) => r.id, type: (r) => r.type, pass: (r) => (r.pass ? 1 : 0) }, { defaultSort: '', pageSize: 30 });
   return (
     <div className="page">
       <PageHead
@@ -43,7 +44,7 @@ export function EvalPage() {
       />
       {err && <ErrorBox msg={err} onRetry={() => start()} />}
       {busy && <div className="progress"><span /><span className="muted small">正在分批运行（每批 8 题）{prog ? `：已完成 ${prog.done}/${prog.total}` : '…'}，线上模式约 2–4 分钟（开始于 {new Date(t0).toLocaleTimeString()}）</span></div>}
-      {!run && !busy && !err && <Empty title="还没有评测结果">点击「运行评测集」，逐题对比期望决策、必须引用、禁用词与告警类别。</Empty>}
+      {!run && !busy && !err && <Empty art="doc" title="还没有评测结果">点击「运行评测集」，逐题对比期望决策、必须引用、禁用词与告警类别。</Empty>}
       {run && (
         <>
           <div className="eval-sum">
@@ -54,7 +55,7 @@ export function EvalPage() {
             </div>
             <div className="bytype">
               {run.byType.map((b) => (
-                <button key={b.type} className={`bt${type === b.type ? ' on' : ''}`} onClick={() => setType((t) => (t === b.type ? '' : b.type))}>
+                <button key={b.type} className={`bt${type === b.type ? ' on' : ''}`} onClick={() => { setType((x) => (x === b.type ? '' : b.type)); t.resetPage(); }}>
                   <span>{EVAL_TYPE_LABEL[b.type] ?? b.type}</span>
                   <span className="bt-track"><i className={b.passed === b.total ? 'tone-green' : 'tone-orange'} style={{ width: pct(b.total ? b.passed / b.total : 0) }} /></span>
                   <span className="num small">{b.passed}/{b.total}</span>
@@ -63,14 +64,14 @@ export function EvalPage() {
             </div>
           </div>
           <div className="filters">
-            <label className="check"><input type="checkbox" checked={onlyFail} onChange={(e) => setOnlyFail(e.target.checked)} /> 只看失败（{fails.length}）</label>
+            <label className="check"><input type="checkbox" checked={onlyFail} onChange={(e) => { setOnlyFail(e.target.checked); t.resetPage(); }} /> 只看失败（{fails.length}）</label>
             {type && <button className="btn sm ghost" onClick={() => setType('')}>清除类型筛选：{EVAL_TYPE_LABEL[type] ?? type} <Icon name="x" size={12} /></button>}
           </div>
           <div className="tbl-wrap">
             <table className="tbl">
-              <thead><tr><th>ID</th><th>类型</th><th>问题</th><th>期望</th><th>实际</th><th>结果</th></tr></thead>
+              <thead><tr>{t.th('id', 'ID')}{t.th('type', '类型')}<th>问题</th><th>期望</th><th>实际</th>{t.th('pass', '结果')}</tr></thead>
               <tbody>
-                {rows.map((r) => (
+                {t.view.map((r) => (
                   <tr key={r.id} className={r.pass ? '' : 'row-fail'}>
                     <td className="num nowrap">{r.id}</td>
                     <td className="nowrap">{EVAL_TYPE_LABEL[r.type] ?? r.type}</td>
@@ -97,6 +98,7 @@ export function EvalPage() {
               </tbody>
             </table>
           </div>
+          <Pager page={t.page} pages={t.pages} total={t.total} size={t.size} onPage={t.setPage} />
         </>
       )}
     </div>

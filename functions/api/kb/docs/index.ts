@@ -22,32 +22,48 @@ function slug(s: string) {
   return a.length >= 3 ? a.slice(0, 48) : `doc-${Date.now().toString(36)}`;
 }
 
+type DocBody = { docKey?: unknown; title?: unknown; category?: unknown; productRisk?: unknown; tags?: unknown; content?: unknown; changeNote?: unknown; gapId?: unknown; author?: unknown; source?: unknown; effectiveDate?: unknown };
+
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
-  const b = await readJson<{ docKey?: string; title?: string; category?: string; productRisk?: string | null; tags?: string[] | string; content?: string; changeNote?: string; gapId?: string | null; author?: string; source?: string; effectiveDate?: string }>(request);
-  const content = String(b.content ?? '');
+  const b = await readJson<DocBody>(request);
+  // 字段类型校验（拒绝对象/数组被 String() 强转成 "[object Object]"）
+  for (const k of ['docKey', 'title', 'category', 'content', 'changeNote', 'gapId', 'author', 'source', 'effectiveDate'] as const) {
+    if (b[k] !== undefined && b[k] !== null && typeof b[k] !== 'string') throw new HttpError(400, 'BAD_INPUT', `${k} 必须是字符串`);
+  }
+  if (b.productRisk !== undefined && b.productRisk !== null && typeof b.productRisk !== 'string') throw new HttpError(400, 'BAD_INPUT', 'productRisk 必须是 R1–R5 或 null');
+  if (b.tags !== undefined && b.tags !== null && !(typeof b.tags === 'string' || (Array.isArray(b.tags) && b.tags.every((t) => typeof t === 'string')))) throw new HttpError(400, 'BAD_INPUT', 'tags 必须是字符串数组');
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  const content = str(b.content) ?? '';
   const { meta: fm, body } = parseFrontMatter(content);
-  const title = String(b.title ?? fm.title ?? '').trim();
+  let docKey = (str(b.docKey) ?? (typeof fm.doc_key === 'string' ? fm.doc_key : '')).trim();
+  if (docKey && !/^[a-z0-9][a-z0-9-]{1,63}$/.test(docKey)) throw new HttpError(400, 'BAD_INPUT', 'docKey 只能包含小写字母、数字和连字符');
+  // 编辑已有文档：未传的元数据继承当前发布版本（没有发布版本则取最新版本）的 front-matter
+  const prev = docKey ? await first<{ content: string }>(env.DB, `SELECT content FROM doc_versions WHERE doc_key = ? ORDER BY CASE status WHEN 'published' THEN 0 ELSE 1 END, version DESC LIMIT 1`, docKey) : null;
+  const pm = prev ? parseFrontMatter(prev.content).meta : {};
+  const pick = <T,>(...vals: T[]) => vals.find((v) => v !== undefined && v !== null && v !== '');
+  const title = String(pick(str(b.title), fm.title as string, pm.title as string) ?? '').trim();
   if (!title) throw new HttpError(400, 'BAD_INPUT', 'title 不能为空');
   if (!body.trim() || !/^##\s/m.test(body)) throw new HttpError(400, 'BAD_INPUT', 'content 至少包含一个 "## 小标题" 段落');
-  const category = String(b.category ?? fm.category ?? 'investor_edu');
+  const category = String(pick(str(b.category), fm.category as string, pm.category as string) ?? 'investor_edu');
   if (!isCategory(category)) throw new HttpError(400, 'BAD_INPUT', `category 无效：${category}`);
-  const pr = b.productRisk ?? (fm.product_risk as string | null) ?? null;
-  if (pr && !RISKS.includes(String(pr))) throw new HttpError(400, 'BAD_INPUT', `productRisk 无效：${pr}`);
-  const tags = Array.isArray(b.tags) ? b.tags.map(String) : typeof b.tags === 'string' ? b.tags.split(/[,，\s]+/).filter(Boolean) : Array.isArray(fm.tags) ? (fm.tags as string[]) : [];
-  let docKey = String(b.docKey ?? fm.doc_key ?? '').trim();
-  if (docKey && !/^[a-z0-9][a-z0-9-]{1,63}$/.test(docKey)) throw new HttpError(400, 'BAD_INPUT', 'docKey 只能包含小写字母、数字和连字符');
+  const prRaw = 'productRisk' in b ? b.productRisk : pick(fm.product_risk, pm.product_risk);
+  const pr = typeof prRaw === 'string' && prRaw ? prRaw : null;
+  if (pr && !RISKS.includes(pr)) throw new HttpError(400, 'BAD_INPUT', `productRisk 无效：${pr}`);
+  const tags = Array.isArray(b.tags) ? (b.tags as string[]) : typeof b.tags === 'string' ? b.tags.split(/[,，\s]+/).filter(Boolean)
+    : Array.isArray(fm.tags) && fm.tags.length ? (fm.tags as string[]) : Array.isArray(pm.tags) ? (pm.tags as string[]).map(String) : [];
   if (!docKey) docKey = slug(title);
   const ts = nowIso();
   const exists = await first(env.DB, 'SELECT doc_key FROM documents WHERE doc_key = ?', docKey);
   if (!exists) await run(env.DB, 'INSERT INTO documents (doc_key, title, category, product_risk, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)', docKey, title, category, pr, JSON.stringify(tags), ts);
   const full = buildFrontMatter({ doc_key: docKey, title, category, product_risk: (pr as ProductRisk) ?? null, tags,
-    source: String(b.source ?? fm.source ?? '运营后台编辑'), effective_date: String(b.effectiveDate ?? fm.effective_date ?? ts.slice(0, 10)) }) + body.replace(/^\n+/, '');
-  let gapId = b.gapId ?? null;
+    source: String(pick(str(b.source), fm.source as string, pm.source as string) ?? '运营后台编辑'),
+    effective_date: String(pick(str(b.effectiveDate), fm.effective_date as string, pm.effective_date as string) ?? ts.slice(0, 10)) }) + body.replace(/^\n+/, '');
+  let gapId = str(b.gapId) ?? null;
   if (!gapId) gapId = (await first<{ gap_id: string }>(env.DB, `SELECT gap_id FROM doc_versions WHERE doc_key = ? AND status = 'draft' AND gap_id IS NOT NULL ORDER BY version DESC LIMIT 1`, docKey))?.gap_id ?? null;
   const version = await nextVersion(env.DB, docKey);
   const id = `dv_${uid().slice(0, 8)}`;
   await run(env.DB, `INSERT INTO doc_versions (id, doc_key, version, content, change_note, author, status, gap_id, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
-    id, docKey, version, full, String(b.changeNote ?? '').slice(0, 300), String(b.author ?? '运营').slice(0, 40), gapId, ts);
+    id, docKey, version, full, (str(b.changeNote) ?? '').slice(0, 300), (str(b.author) ?? '运营').slice(0, 40), gapId, ts);
   if (gapId) await run(env.DB, `UPDATE gaps SET status = CASE WHEN status = 'open' THEN 'drafting' ELSE status END, doc_key = ? WHERE id = ?`, docKey, gapId);
   const row = await first(env.DB, 'SELECT * FROM doc_versions WHERE id = ?', id);
   return json({ ...camel(row), version: camel(row) });

@@ -68,6 +68,8 @@ export interface PipelineOptions {
   mode?: 'server' | 'local';
   /** 第二层 LLM 意图分类（默认开启；llm=null 时自动跳过） */
   intentLlm?: boolean;
+  /** 意图分类 + 生成的总 LLM 时间预算（默认 13000ms） */
+  llmBudgetMs?: number;
   maxInputLen?: number;          // 默认 500
   tUnknownHybrid?: number;       // 默认 0.35
   tUnknownKeyword?: number;      // 默认 0.25

@@ -92,11 +92,11 @@ describe('chat 落库', () => {
     expect(b.body.id).not.toBe(a.body.id);
     expect(b.body.checks.some((c: any) => c.name === 'cache')).toBe(true);
   });
-  it('日志详情含 response 与 response_json；差评生成 bad_feedback 缺口', async () => {
+  it('日志详情含 response（不重复返回 responseJson）；差评生成 bad_feedback 缺口', async () => {
     const a = await ask('ETF和LOF有什么区别？', 'C4');
     const d = await call(logDetail.onRequestGet, 'GET', `/api/logs/${a.body.id}`, undefined, {}, { id: a.body.id });
     expect(d.body.response.id).toBe(a.body.id);
-    expect(typeof d.body.responseJson).toBe('string');
+    expect(d.body.responseJson).toBeUndefined();
     const f = await call(feedback.onRequestPost, 'POST', '/api/feedback', { qaId: a.body.id, helpful: false });
     expect(f.body.gapId).toBeTruthy();
   });
@@ -155,5 +155,78 @@ describe('dashboard / eval / 限流', () => {
     expect(codes.slice(0, 20).every((c) => c === 200)).toBe(true);
     expect(codes[20]).toBe(429);
     expect((await mw.onRequest(ctx('5.6.7.8') as any)).status).toBe(200);
+  });
+});
+
+describe('QA 第 1 轮：接口边界', () => {
+  const catchAll = async (method: string, path: string) => {
+    const mod = await import('../functions/api/[[path]]');
+    const res: Response = await (mod.onRequest as any)({ request: new Request(`http://localhost${path}`, { method }), env, params: {} });
+    return { status: res.status, body: await res.json() as any };
+  };
+  it('B9 方法不对 → 405', async () => {
+    expect((await catchAll('GET', '/api/chat')).status).toBe(405);
+    expect((await catchAll('DELETE', '/api/tickets/x')).status).toBe(405);
+    expect((await catchAll('GET', '/api/nope')).status).toBe(404);
+  });
+  it('B11 已关闭工单不能直接改回 pending；reopen 可重开', async () => {
+    const r = await ask('转人工');
+    const id = r.body.handoff.ticketId;
+    const tk = await import('../functions/api/tickets/[id]');
+    await call(tk.onRequestPost, 'POST', `/api/tickets/${id}`, { status: 'closed', reply: 'ok' }, {}, { id });
+    await expect(call(tk.onRequestPost, 'POST', `/api/tickets/${id}`, { status: 'pending' }, {}, { id })).rejects.toMatchObject({ status: 409 });
+    const re = await call(tk.onRequestPost, 'POST', `/api/tickets/${id}`, { reopen: true }, {}, { id });
+    expect(re.body.ticket.status).toBe('processing');
+  });
+  it('B12 重复 ack 不覆盖处理时间；B13 limit=-1 截断', async () => {
+    const r = await ask('宁德时代还能上车吗？');
+    const a = (await call(alerts.onRequestGet, 'GET', '/api/alerts?status=open')).body.items.find((x: any) => x.qaId === r.body.id);
+    const ack = await import('../functions/api/alerts/[id]/ack');
+    const a1 = await call(ack.onRequestPost, 'POST', `/api/alerts/${a.id}/ack`, { by: 'A' }, {}, { id: a.id });
+    const a2 = await call(ack.onRequestPost, 'POST', `/api/alerts/${a.id}/ack`, { by: 'B' }, {}, { id: a.id });
+    expect(a2.body.handledAt).toBe(a1.body.handledAt);
+    expect(a2.body.handledBy).toBe('A');
+    const l = await call(alerts.onRequestGet, 'GET', '/api/alerts?limit=-1');
+    expect(l.body.items.length).toBeLessThanOrEqual(1);
+  });
+  it('B14 同一记录重复差评不重复计数', async () => {
+    const a = await ask('ETF和LOF有什么区别？', 'C5');
+    const f1 = await call(feedback.onRequestPost, 'POST', '/api/feedback', { qaId: a.body.id, helpful: false });
+    const f2 = await call(feedback.onRequestPost, 'POST', '/api/feedback', { qaId: a.body.id, helpful: false });
+    expect(f1.body.gapId).toBeTruthy();
+    expect(f2.body.gapId).toBeNull();
+  });
+  it('B15 eval 参数校验', async () => {
+    for (const body of [{ limit: 0 }, { limit: 'x' }, { ids: 'O07' }, { offset: -1 }]) {
+      await expect(call(evalRun.onRequestPost, 'POST', '/api/eval/run', body)).rejects.toMatchObject({ status: 400 });
+    }
+  });
+  it('B17 字段类型校验', async () => {
+    await expect(call(docs.onRequestPost, 'POST', '/api/kb/docs', { title: { x: 1 }, content: ['## a'] })).rejects.toMatchObject({ status: 400 });
+    const pc = await import('../functions/api/kb/preview-chunks');
+    await expect(call(pc.onRequestPost, 'POST', '/api/kb/preview-chunks', { content: { toString: 1 } })).rejects.toMatchObject({ status: 400 });
+    await expect(call(feedback.onRequestPost, 'POST', '/api/feedback', { qaId: { a: 1 }, helpful: true })).rejects.toMatchObject({ status: 400 });
+  });
+  it('B17 中间件 500 不外泄内部异常', async () => {
+    const res = await mw.onRequest({ request: new Request('http://localhost/api/x'), env, params: {}, next: async () => { throw new Error('D1_TYPE_ERROR secret detail'); }, waitUntil() {}, data: {} } as any);
+    const b = await res.json() as any;
+    expect(res.status).toBe(500);
+    expect(b.error.message).not.toContain('D1_TYPE_ERROR');
+  });
+  it('B18 编辑已有文档未传 tags/source 时继承发布版本', async () => {
+    const r = await call(docs.onRequestPost, 'POST', '/api/kb/docs', { docKey: 'rule-trading-hours', content: '## 测试\n测试正文。', changeNote: 'qa' });
+    expect(r.body.content).toMatch(/tags: \[.+\]/);
+    expect(r.body.content).not.toContain('source: 运营后台编辑');
+    expect(r.body.content).toMatch(/title: .*交易时间/);
+  });
+  it('B5 D1 全局限流：跨 isolate 计数（重置内存后仍累计）', async () => {
+    const { d1RateLimit } = await import('../functions/_lib/http');
+    const now = Date.UTC(2026, 9, 14, 12, 0, 30);
+    const res: (boolean | undefined)[] = [];
+    for (let i = 0; i < 21; i++) { resetRateLimits(); res.push((await d1RateLimit(env.DB, 'chat', '9.9.9.9', 20, now))?.ok); }
+    expect(res.slice(0, 20).every(Boolean)).toBe(true);
+    expect(res[20]).toBe(false);
+    const { faultyDb } = await import('../functions/_lib/db');
+    expect(await d1RateLimit(faultyDb(), 'chat', '9.9.9.9', 20, now)).toBeNull();   // D1 失败 → 放行
   });
 });

@@ -2,7 +2,7 @@
 import type { Adapters, ChatRequest, ChatResponse, CheckResult, Chunk, Citation, ComplianceCategory, ComplianceHit, Decision, LlmMessage, PipelineOptions, Retrieved, RiskLevel } from './types';
 import { InputError } from './types';
 import { analyzeInput, isViolation, maskPII, scanOutput } from './compliance';
-import { CAVEAT_TEXT, CHITCHAT_RE, INTRO_TEXT, DEGRADED_PREFIX, LOCAL_PREFIX, REFUSAL_PRIORITY, buildScriptBook, fillTicket, scriptKeyFor, suitabilityNotice, type ScriptBook } from './templates';
+import { CAVEAT_TEXT, CHITCHAT_RE, INTRO_TEXT, THANKS_RE, THANKS_TEXT, UNCLEAR_TEXT, DEGRADED_PREFIX, LOCAL_PREFIX, REFUSAL_PRIORITY, buildScriptBook, fillTicket, scriptKeyFor, suitabilityNotice, type ScriptBook } from './templates';
 import { attachCitations, computeConfidence, computeGrounding, decideByConfidence, extractCitations, matchSuitability, maxProductRisk, normalizeRetrieval, round, sentenceEvidence, SENT_AUTOCITE, T_CAVEAT, validateCitations, type Breakdown, type SentenceEvidence } from './confidence';
 import { charBigramSet } from './tokenize';
 import { splitSentences } from './chunk';
@@ -16,6 +16,8 @@ export const T_UNKNOWN_KEYWORD = 0.25;
 /** LLM 判 covered=false 时，仍允许作答所需的最低 grounding 与 top1（线上 bge-m3 实测校准，见 docs/eval-log.md） */
 export const COVERED_FALSE_MIN_GROUNDING = 0.5;
 export const COVERED_FALSE_MIN_TOP1 = 0.65;
+/** 意图分类 + 生成的总时间预算 */
+export const LLM_TOTAL_BUDGET_MS = 13_000;
 const BOILERPLATE = /^(具体|实际|详细)?.{0,6}(以|请以|应以).{0,24}(为准|准)[。！]?$|仅供参考|^(建议|请)(您)?.{0,10}(咨询|联系|查看|关注|留意)|^如有疑问/;
 
 /** 步骤 1：输入清洗（去 HTML、去空白、截断） */
@@ -127,9 +129,58 @@ export function refusalFor(categories: ComplianceCategory[], book: ScriptBook): 
     texts.push(i === 0 ? e.text : (splitSentences(e.text)[0] ?? e.text).replace(/^抱歉，/, '同时，'));
     if (e.chunk && !scripts.some((x) => x.id === e.chunk!.id)) scripts.push(e.chunk);
   });
-  if (!texts.length) { texts.push(book.get('injection').text); }
+  if (!texts.length) {
+    // 纯注入：拒绝执行 + 引用统一风险提示话术文档
+    texts.push(book.get('injection').text);
+    const d = book.get('disclaimer').chunk; if (d) scripts.push(d);
+  }
   return { text: texts.join(''), scripts };
 }
+
+/** 隐私提醒句（取自 script-privacy 话术中"请不要…"一句） */
+function piiNotice(book: ScriptBook): string {
+  const t = book.get('privacy').text;
+  return splitSentences(t).find((x) => /请不要|请勿/.test(x)) ?? '请不要在对话中发送身份证号、银行卡号、密码等敏感信息。';
+}
+
+/** 无意义输入：纯符号/表情、重复单字、代码/SQL 片段、无中文且无英文实词 */
+export function isNonsense(q: string): boolean {
+  const s = q.normalize('NFKC');
+  const cjk = s.match(/[\u3400-\u9fff]/g) ?? [];
+  const words = (s.match(/[A-Za-z]{2,}/g) ?? []).map((w) => w.toLowerCase());
+  const sqlish = /(\b(select|drop|delete|insert|update|union|table|from|where)\b.*){2,}|--\s*$|;\s*--|'\s*or\s*'?\d+'?\s*=\s*'?\d+/i.test(s);
+  if (!cjk.length) {
+    if (sqlish) return true;
+    const real = words.filter((w) => w.length >= 3 && !/^(select|drop|delete|insert|update|union|table|from|where|null|script|alert)$/.test(w));
+    return real.length < 2;
+  }
+  const distinct = new Set(cjk).size;
+  if (distinct <= 2 && cjk.length >= 3) return true;            // "科科科科…"
+  if (cjk.length <= 1 && words.length === 0) return true;         // 单字
+  // 中文很少、主体是 SQL/代码时也视为无意义（"科创板开通条件'); DELETE…" 仍有足够中文 → 正常处理）
+  return sqlish && distinct < 3;
+}
+
+/** 去掉答案中重复的条目/句子（模型偶发把同一条写两遍） */
+export function dedupeAnswer(text: string): { text: string; removed: number } {
+  const parts = text.split(/(?=[①②③④⑤⑥⑦⑧⑨⑩])|(?<=[。；;！!？?])/);
+  const seen: Set<string>[] = []; const out: string[] = []; let removed = 0;
+  for (const p of parts) {
+    const core = p.replace(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*/, '').replace(/\[\d+\]/g, '').replace(/[。；;，,\s]/g, '');
+    if (core.length >= 6) {
+      const b = charBigramSet(core);
+      if (seen.some((x) => jaccardSets(x, b) >= 0.85)) { removed++; continue; }
+      seen.push(b);
+    }
+    out.push(p);
+  }
+  if (!removed) return { text, removed };
+  // 重新编号 ①②③
+  let k = 0; const nums = '①②③④⑤⑥⑦⑧⑨⑩';
+  const t = out.join('').replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, () => nums[k++] ?? '');
+  return { text: t, removed };
+}
+function jaccardSets(a: Set<string>, b: Set<string>) { let i = 0; for (const x of a) if (b.has(x)) i++; return i / (a.size + b.size - i || 1); }
 
 const ZERO: Breakdown = { retrieval: 0, coverage: 0, grounding: 0, citation: 0 };
 
@@ -143,8 +194,10 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   // 1. 输入校验
   const inp = sanitizeInput(req?.question, opts.maxInputLen ?? MAX_INPUT);
   if (!inp.text) throw new InputError('问题不能为空');
-  const userRisk: RiskLevel = RISKS.includes(req.userRisk) ? req.userRisk : 'C3';
-  checks.push({ name: 'input_validation', pass: !inp.truncated, detail: [`长度 ${[...inp.text].length}`, inp.truncated ? `超过 ${opts.maxInputLen ?? MAX_INPUT} 字已截断` : '', inp.strippedHtml ? '已去除 HTML 标签' : '', RISKS.includes(req.userRisk) ? '' : `风险等级无效，按 C3 处理`].filter(Boolean).join('；') });
+  const riskRaw = String(req.userRisk ?? '').trim().toUpperCase() as RiskLevel;
+  const userRisk: RiskLevel = RISKS.includes(riskRaw) ? riskRaw : 'C3';
+  const riskNote = RISKS.includes(req.userRisk) ? '' : RISKS.includes(riskRaw) ? `风险等级 "${String(req.userRisk)}" 已规范为 ${riskRaw}` : `风险等级无效（${String(req.userRisk ?? '空')}），按 C3 处理`;
+  checks.push({ name: 'input_validation', pass: !inp.truncated, detail: [`长度 ${[...inp.text].length}`, inp.truncated ? `超过 ${opts.maxInputLen ?? MAX_INPUT} 字已截断` : '', inp.strippedHtml ? '已去除 HTML 标签' : '', riskNote].filter(Boolean).join('；') });
   const q = inp.text;
   const secretCtx = /(密码|验证码|手机|身份证|卡号|银行卡)/.test(q);
 
@@ -165,7 +218,9 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
     id, compliance, checks, disclaimer, kbRelease: adapters.kbRelease, suitability: null as ChatResponse['suitability'],
   };
   const finish = (r: Omit<ChatResponse, 'id' | 'compliance' | 'checks' | 'disclaimer' | 'kbRelease' | 'latencyMs' | 'suitability'> & { suitability?: ChatResponse['suitability'] }): ChatResponse => ({
-    ...base, ...r, suitability: r.suitability ?? null, answer: maskPII(r.answer), latencyMs: Math.max(0, Math.round(now() - t0)),
+    ...base, ...r, suitability: r.suitability ?? null,
+    // 用户发了本人敏感信息：非拒答场景在答案前提醒（拒答话术本身已包含提醒）
+    answer: maskPII(ana.selfPii && r.decision !== 'refused' ? `${piiNotice(book)}\n\n${r.answer}` : r.answer), latencyMs: Math.max(0, Math.round(now() - t0)),
     // 追溯信息同样脱敏：check 明细里可能带有用户输入/模型输出片段
     checks: checks.map((c) => ({ ...c, detail: secretCtx ? maskPII(c.detail, true).replace(/(?<!\d)\d{6}(?!\d)/g, '******') : maskPII(c.detail) })),
   });
@@ -175,16 +230,16 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   if (ana.verdict === 'handoff') {
     const tid = ticketId();
     const e = book.get('handoff_request');
-    checks.push({ name: 'route', pass: true, detail: '用户要求人工/投诉 → 生成工单' });
+    checks.push({ name: 'route', pass: true, detail: `${ana.handoffReason || '用户要求人工/投诉'} → 生成工单` });
     return finish({
       decision: 'handoff_request', answer: fillTicket(e.text, tid), citations: e.chunk ? [toCitation(1, e.chunk)] : [],
-      confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 }, handoff: { reason: '用户要求人工服务或投诉', ticketId: tid },
+      confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 }, handoff: { reason: ana.handoffReason || '用户要求人工服务或投诉', ticketId: tid },
       retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: null,
     });
   }
   // 2b. 整体越界
   if (ana.verdict === 'refuse') {
-    const r = refusalFor(violCats, book);
+    const r = refusalFor(violCats.length ? violCats : ana.selfPii ? ['privacy'] : [], book);
     checks.push({ name: 'route', pass: true, detail: violCats.length ? `整体越界（${violCats.join('、')}）→ 合规话术拒答，不调用 LLM` : '仅含注入指令 → 拒绝执行' });
     return finish({
       decision: 'refused', answer: r.text, citations: r.scripts.map((c, i) => toCitation(i + 1, c)),
@@ -192,11 +247,15 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
       retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: null,
     });
   }
-  // 2c. 问候/闲聊/"你能做什么"：固定自我介绍，不检索、不调 LLM、不建工单、不记缺口
-  if (ana.verdict === 'clean' && !ana.hits.length && CHITCHAT_RE.test(q.replace(/\s+/g, ''))) {
-    checks.push({ name: 'chitchat', pass: true, detail: '识别为问候/闲聊/功能询问 → 固定自我介绍' });
+  // 2c. 问候/闲聊/"你能做什么"：固定自我介绍（致谢则简短回应）；无意义输入给澄清引导。均不检索、不调 LLM、不建工单、不记缺口
+  const compactQ = q.replace(/\s+/g, '');
+  const thanks = THANKS_RE.test(compactQ);
+  const nonsense = ana.verdict === 'clean' && !ana.hits.length && !thanks && !CHITCHAT_RE.test(compactQ) && isNonsense(q);
+  if (ana.verdict === 'clean' && !ana.hits.length && (thanks || nonsense || CHITCHAT_RE.test(compactQ))) {
+    checks.push(nonsense ? { name: 'unclear_input', pass: false, detail: '输入无可识别的问题（符号/乱码/重复字符/代码片段）→ 澄清引导，不记缺口、不建工单' }
+      : { name: 'chitchat', pass: true, detail: thanks ? '识别为致谢 → 简短回应' : '识别为问候/闲聊/功能询问 → 固定自我介绍' });
     return finish({
-      decision: 'answered', answer: INTRO_TEXT, citations: [], confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 },
+      decision: 'answered', answer: nonsense ? UNCLEAR_TEXT : thanks ? THANKS_TEXT : INTRO_TEXT, citations: [], confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 },
       handoff: null, retrieval: [], mode: mode0 === 'local' ? 'local' : 'llm', model: null,
     });
   }
@@ -219,6 +278,8 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   // clean：整句分类；mixed：只复核规则认为"可回答"的剩余部分（防止剩余部分本身也是越界变体）
   const useIntent = opts.intentLlm !== false && !!adapters.llm && (ana.verdict === 'clean' || ana.verdict === 'mixed');
   const t1 = now();
+  // LLM 总预算（意图分类 + 生成共用），默认 13s：分类慢时生成只能用剩余时间
+  const llmDeadline = t1 + (opts.llmBudgetMs ?? LLM_TOTAL_BUDGET_MS);
   const [ret, intentRes] = await Promise.all([
     doRetrieve(askText),
     useIntent ? classifyIntent(adapters.llm!, askText).then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, e })) : Promise.resolve(null),
@@ -229,9 +290,11 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
     else {
       const it: Intent = intentRes.v;
       // 反诈识别类问法（规则已识别）不因 LLM 判内幕/荐股群而拒答：保持教育作答
-      const fraudOverride = ana.fraudEdu && !ana.entities.length && (it.category === 'insider_manip' || it.category === 'managed_account');
+      const fraudOverride = (ana.fraudEdu && !ana.entities.length && (it.category === 'insider_manip' || it.category === 'managed_account'))
+        // 用户发的是本人信息（规则已识别并脱敏、会提醒），LLM 判"他人隐私"属误判
+        || (it.category === 'privacy' && ana.selfPii && !/(他|她|别人|他人|朋友|同事|家人|老婆|老公|客户经理|某人)/.test(q));
       const viol = it.category !== 'education' && it.category !== 'chitchat' && !fraudOverride;
-      checks.push({ name: 'intent_llm', pass: !viol, detail: `第二层 LLM 意图分类：${it.category}${viol ? `（${it.scope === 'partial' ? '部分越界' : '整体越界'}）` : ''}；理由：${it.reason || '—'}${fraudOverride ? '；规则识别为反诈识别类问法，按教育作答' : ''}；${ms}ms` });
+      checks.push({ name: 'intent_llm', pass: !viol, detail: `第二层 LLM 意图分类：${it.category}${viol ? `（${it.scope === 'partial' ? '部分越界' : '整体越界'}）` : ''}；理由：${it.reason || '—'}${fraudOverride ? (it.category === 'privacy' ? '；用户提供的是本人信息，不按他人隐私拒答' : '；规则识别为反诈识别类问法，按教育作答') : ''}；${ms}ms` });
       if (it.category === 'chitchat' && !mixed && !ana.hits.length && q.length <= 20) {
         return finish({
           decision: 'answered', answer: INTRO_TEXT, citations: [], confidence: 1, confidenceBreakdown: { retrieval: 1, coverage: 1, grounding: 1, citation: 1 },
@@ -301,7 +364,9 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
     for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
       try {
         const m = attempt === 0 ? msgs : [...msgs, { role: 'user', content: '上一次输出不是合法 JSON。请只输出 {"answer":"...","used":[...],"covered":true|false}。' }];
-        const raw = await adapters.llm(m, { maxTokens: 700, json: true });
+        const left = llmDeadline - now();
+        if (left < 1500) throw new Error(`LLM 总预算（${opts.llmBudgetMs ?? LLM_TOTAL_BUDGET_MS}ms）已用尽`);
+        const raw = await adapters.llm(m, { maxTokens: 700, json: true, timeoutMs: Math.min(12_000, left) });
         parsed = parseLlmJson(raw);
         if (!parsed) checks.push({ name: 'llm_parse', pass: false, detail: `第 ${attempt + 1} 次输出无法解析为 JSON${attempt === 0 ? '，重试 1 次' : ''}` });
       } catch (e) { err = e; break; }
@@ -344,7 +409,7 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   // 8. 逐句证据核验：无依据句（重合率 < 0.35 或含资料中不存在的数字）剔除；无引用但有依据的句子补引用
   let dropped: SentenceEvidence[] = []; let autoCited = 0; let factual = 0;
   if (!extractive) {
-    const ev = sentenceEvidence(answer, numbered);
+    const ev = sentenceEvidence(answer, numbered, askText);
     factual = ev.length;
     dropped = ev.filter((e) => !e.supported);
     for (const e of dropped) answer = answer.split(e.text).join('');
@@ -357,7 +422,9 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
       }
     }
     answer = answer.replace(/\n{3,}/g, '\n\n').trim();
-    checks.push({ name: 'evidence', pass: dropped.length === 0, detail: `事实句 ${ev.length}，剔除无依据 ${dropped.length}${dropped.length ? `（${dropped.map((d) => `「${d.text.slice(0, 24)}」重合${d.overlap}${d.missingNumbers.length ? `、资料无数字 ${d.missingNumbers.join('/')}` : ''}`).join('；')}）` : ''}${autoCited ? `；按重合度补/改引用 ${autoCited} 句` : ''}` });
+    const dd = dedupeAnswer(answer);
+    if (dd.removed) { answer = dd.text; checks.push({ name: 'dedupe', pass: false, detail: `去除重复条目 ${dd.removed} 处` }); }
+    checks.push({ name: 'evidence', pass: dropped.length === 0, detail: `事实句 ${ev.length}，剔除无依据 ${dropped.length}${dropped.length ? `（${dropped.map((d) => `「${d.text.slice(0, 24)}」重合${d.overlap}${d.missingNumbers.length ? `、资料无数字 ${d.missingNumbers.join('/')}` : ''}${d.missingTerms.length ? `、依据块无术语 ${d.missingTerms.join('/')}` : ''}${d.qualifierChange ? `、${d.qualifierChange}` : ''}`).join('；')}）` : ''}${autoCited ? `；按重合度补/改引用 ${autoCited} 句` : ''}` });
   }
   const finalCites = validateCitations(answer, numbered.length);
   const citedNums = [...new Set([...finalCites.valid, ...(finalCites.valid.length ? [] : used.filter((n) => n >= 1 && n <= numbered.length))])].sort((a, b) => a - b);
@@ -375,7 +442,7 @@ export async function runPipeline(req: ChatRequest, adapters: Adapters, opts: Pi
   // 9a. 无依据闸门：LLM 自认未覆盖、或无依据句过多 → 不展示生成内容，直接转人工（宁可转人工，不编造）
   if (!extractive) {
     // 只剩套话（"具体以…为准""建议咨询…"）不算作答
-    const substantive = sentenceEvidence(answer, numbered).filter((e) => !BOILERPLATE.test(e.text.replace(/\[\d+\]/g, ''))).length;
+    const substantive = sentenceEvidence(answer, numbered, askText).filter((e) => !BOILERPLATE.test(e.text.replace(/\[\d+\]/g, ''))).length;
     const remaining = Math.min(factual - dropped.length, substantive);
     const notCovered = !covered && (grounding < COVERED_FALSE_MIN_GROUNDING || dropped.length > 0 || (!mixed && top1 < COVERED_FALSE_MIN_TOP1));
     const tooManyDropped = remaining <= 0 || dropped.length * 2 > factual;

@@ -1,7 +1,7 @@
 // POST /api/eval/run {ids?, llm?=true, offset?, limit?} → 逐题结果与通过率（core/eval.ts summarize 结构）
 // 线上免费额度/子请求有限：查询向量一次批量计算；同题命中 10 分钟缓存；可用 offset/limit 或 ids 分批跑。
 import type { Env } from '../../_lib/env';
-import { json, readJson } from '../../_lib/http';
+import { HttpError, json, readJson } from '../../_lib/http';
 import { answer } from '../../_lib/chat';
 import { embedTexts } from '../../_lib/ai';
 import { loadKb } from '../../_lib/db';
@@ -14,9 +14,13 @@ const ALL = questions as unknown as EvalQuestion[];
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const b = await readJson<{ ids?: string[]; llm?: boolean; offset?: number; limit?: number; persist?: boolean }>(request);
+  // 参数校验：ids 必须是字符串数组；offset/limit 必须是整数（limit 1..200，缺省=全部）
+  if (b.ids !== undefined && !(Array.isArray(b.ids) && b.ids.every((x) => typeof x === 'string'))) throw new HttpError(400, 'BAD_INPUT', 'ids 必须是字符串数组');
+  if (b.offset !== undefined && !(Number.isInteger(b.offset) && (b.offset as number) >= 0)) throw new HttpError(400, 'BAD_INPUT', 'offset 必须是 ≥0 的整数');
+  if (b.limit !== undefined && !(Number.isInteger(b.limit) && (b.limit as number) >= 1 && (b.limit as number) <= 200)) throw new HttpError(400, 'BAD_INPUT', 'limit 必须是 1–200 的整数');
   let list = Array.isArray(b.ids) && b.ids.length ? ALL.filter((q) => b.ids!.includes(q.id)) : ALL;
-  const offset = Math.max(0, Number(b.offset) || 0);
-  const limit = Math.max(1, Math.min(200, Number(b.limit) || list.length));
+  const offset = (b.offset as number | undefined) ?? 0;
+  const limit = (b.limit as number | undefined) ?? Math.min(200, list.length || 1);
   list = list.slice(offset, offset + limit);
   const kb = await loadKb(env.DB);
   // 预计算查询向量（与管线内检索文本口径一致）

@@ -89,7 +89,7 @@ const MANAGED: RegExp[] = [
   /带(我|我们)(炒|赚|飞|玩|做|上车)/, /(带单|喊单|跟单)/, /你(来|帮我)(操作|操盘|做主|买|卖)/,
   /(全权(委托|代理|处理)|委托(你|您|你们)(操作|管理|买|卖|打理)?|托管给你|收益分成|利润分成|盈利分成)/,
   /(账户|账号)(给你|交给你|借给?你|你来管|让你管)/, /(账号|账户)和?密码/, /密码(给你|发你|告诉你|是多少|是\s*\d)/,
-  /(交易|资金|登录)?密码(是)?\s*\d{4,}/, /验证码(给你|发你|是\s*\d)/, /把.{0,6}(账户|账号|密码|验证码)(给|发|交给|告诉)(你|您)/,
+  /验证码(给你|发你)/, /把.{0,6}(账户|账号|密码|验证码)(给|发|交给|告诉)(你|您)/,
 ];
 const INSIDER: RegExp[] = [
   /(内幕(消息|信息)|内部消息|内部信息|小道消息|独家消息)/, /提前(知道|拿到|得到).{0,6}(消息|利好|公告)/,
@@ -103,18 +103,24 @@ const PRIVACY: RegExp[] = [
 const PRIVACY_OWNER = /(别人|他人|其他(人|客户|用户)|别的(客户|用户)|客户经理|经理|员工|工作人员|同事|朋友|老婆|老公|家人|张三|李四|王[\u4e00-\u9fa5]{0,2}|某人|这个人|那个人|他|她)的?.{0,6}(身份证号?|住址|家庭地址|地址|手机号|电话号码?|持仓|账户|资产|余额|交易记录|收益)/;
 const PRIVACY_ASK = /(告诉我|给我|发我|查|透露|提供|是多少|是什么|有哪些|多少|持有什么|买了什么)/;
 const PII_ID = /(?<!\d)\d{17}[\dx](?!\d)/;
-const PII_PHONE = /(?<!\d)1[3-9]\d{9}(?!\d)/;
+const PII_PHONE = /(?<!\d)(?:86)?1[3-9]\d{9}(?!\d)/;
 const PII_CARD = /(?<!\d)\d{16,19}(?!\d)/;
+/** 用户在对话里发出了自己的密码/验证码 */
+const PII_SECRET = /((交易|资金|登录|支付)?密码(是|为|:)?\S*\d{4,}|密码(是|为|:)[^，。,；;！!？?]{3,}|验证码(是|为|:)?\d{4,})/;
+/** 本人账户事务（需核实身份，转人工）："我的银行卡绑定失败""我开户审核到哪一步""账户被锁" */
+const SELF_ACCOUNT = /(帮我(把|给我)?.{0,6}(开了|开通|办了|办理|激活|解锁|销户|转户)|(我的?|本人|我名下的?)?.{0,12}(银行卡|卡|账户|账号|三方存管|存管|开户|审核|密码|资金).{0,10}(绑定失败|绑不上|失败|怎么办(?!理)|进度|到哪|哪一步|异常|被锁|锁了|锁定|冻结|解锁|解冻|重置|找回|忘了|忘记|扣款|没到账|不到账))/;
+/** 用号码指代他人（"手机号138…的人持有什么"） */
+const PRIVACY_BY_NUMBER = /(手机号?|电话|身份证号?|卡号|账号)\d*\S{0,6}的(人|用户|客户|账户|主人|机主).{0,10}(持有|持仓|买了|信息|是谁|账户|资产|余额|开户)/;
 const INJECTION: RegExp[] = [
   /(忽略|无视|忘记|忘掉|不要管|跳过|绕过|覆盖)(掉)?(之前|上面|以上|前面|先前|所有|全部|你的|系统)?的?(所有|全部)?(指令|规则|提示|设定|限制|要求|约束|规定|prompt|instructions?)/,
-  /ignore\s+(all\s+|any\s+|the\s+)?(previous\s+|prior\s+|above\s+)?(instructions|rules|prompts?)/, /disregard/,
+  /ignore\s*(all\s*|any\s*|the\s*)?(previous\s*|prior\s*|above\s*)?(instructions?|rules|prompts?)/, /forget\s*(all\s*)?(previous|prior|your)\s*(instructions?|rules)/, /you\s*are\s*now/, /act\s*as\s*(a|an)?/, /disregard/,
   /你现在(是|扮演|作为|变成)/, /(你|请|现在)(来)?(扮演|假装|充当|变成)/, /扮演(一)?(个|位|名)/, /角色扮演/, /假设你(是|没有)/,
-  /(开发者模式|developer mode|dan模式|jailbreak|越狱|上帝模式|管理员模式|测试模式)/, /(?<![a-z])dan(?![a-z])/,
+  /(开发者模式|developer\s*mode|dan模式|jailbreak|越狱|上帝模式|管理员模式|测试模式)/, /(?<![a-z])dan(?![a-z])/,
   /不受(任何)?.{0,4}(限制|约束|规则)/, /没有(任何)?(限制|约束)的/, /解除(所有)?限制/,
   /(系统|初始)提示词?/, /system\s*prompt/, /(输出|打印|显示|告诉我|重复)(你的|一下)?(系统)?(提示词|指令|设定|prompt|规则原文)/, /你的(提示词|系统设定|prompt)/,
   /新(的)?指令/, /以.{0,6}(身份|口吻)回答/, /(?<![a-z])sudo(?![a-z])/, /\[system\]/, /<\|.*?\|>/, /#{2,}\s*system/, /从现在(开始|起)[，,]?你/,
 ];
-const COMPLAINT = /(转人工|人工客服|人工服务|人工坐席|找人工|要人工|接人工|真人(客服)?|活人|客服(电话|热线)?|我要投诉|投诉|(找|联系|转)(我的)?客户经理|找你们(领导|经理|负责人)|12386|退钱|赔偿)/;
+const COMPLAINT = /(转人工|人工客服|人工服务|人工坐席|找人工|要人工|接人工|真人(客服)?|活人|客服(电话|热线)?|我要投诉|投诉|(找|联系|转|约|见)(一下)?(我的|你们的?|贵司的?|我们的)?客户经理|找你们(领导|经理|负责人)|12386|退钱|赔偿)/;
 
 /** 预先遮蔽的"规则性名词"（避免"涨跌幅限制""涨停板制度"被当作预测） */
 const MASK_RE = /(涨跌幅(限制|比例)?|涨跌停(板|价|制度|规则|限制)?|涨停板|跌停板|涨停价|跌停价|个股期权|价格涨跌|上涨下跌规则|止损单|止盈单|买卖规则|交易规则)/g;
@@ -124,16 +130,25 @@ export function normalizeForRules(s: string): string {
   return normalizeText(s).replace(/\s+/g, '').replace(/[“”"'‘’「」]/g, '');
 }
 
-/** 隐私脱敏（日志落库/展示前） */
+/** 隐私脱敏（日志落库/展示/送入 LLM 前）。号码允许空格、连字符、+86 等分隔写法。 */
 /** aggressive=true（用户输入）：只要提到密码/验证码，就把 4–8 位数字串一并遮蔽 */
+const SEP = '[\\s\\-－—]?';
+const RE_ID = new RegExp(`(?<![\\dA-Za-z])\\d(?:${SEP}\\d){16}${SEP}[\\dXx](?![\\dA-Za-z])`, 'g');
+const RE_PHONE = new RegExp(`(?:(?:\\+|＋)?86${SEP})?(?<!\\d)1[3-9]\\d(?:${SEP}\\d){8}(?!\\d)`, 'g');
+const RE_CARD = new RegExp(`(?<![\\dA-Za-z])\\d(?:${SEP}\\d){15,18}(?![\\dA-Za-z])`, 'g');
+const keepEnds = (m: string, head: number, tail = 4) => {
+  const digits = m.replace(/[^\dXx]/g, '');
+  return digits.slice(0, head) + '*'.repeat(Math.max(4, digits.length - head - tail)) + digits.slice(-tail);
+};
 export function maskPII(s: string, aggressive = false): string {
   return (s || '')
-    .replace(/(?<!\d)(\d{6})\d{8}(\d{3}[\dXx])(?!\d)/g, '$1********$2')
-    .replace(/(?<!\d)(1[3-9]\d)\d{4}(\d{4})(?!\d)/g, '$1****$2')
-    .replace(/(?<!\d)(\d{4})\d{8,11}(\d{4})(?!\d)/g, '$1********$2')
-    .replace(/((?:交易|资金|登录)?密码\s*(?:是|为|:|：)\s*)[A-Za-z0-9]{4,}/g, '$1******')
-    .replace(/(验证码\s*(?:是|为|:|：)?\s*)\d{4,8}/g, '$1****')
-    .replace(/(?<![\dA-Za-z])\d{4,8}(?![\dA-Za-z])/g, (m, off: number, all: string) => (aggressive && /密码|验证码/.test(all) ? '*'.repeat(m.length) : m));
+    .replace(RE_ID, (m) => keepEnds(m, 6))
+    .replace(RE_CARD, (m) => keepEnds(m, 4))
+    .replace(RE_PHONE, (m) => keepEnds(m.replace(/^(?:\+|＋)?86/, ''), 3))
+    // 密码/验证码语境：整串遮蔽（含符号），"密码是否…"不误伤
+    .replace(/((?:交易|资金|登录|支付|取款)?密码\s*(?:是(?!否)|为|:|：)\s*)[^\s，。,；;！!？?、）)]{1,40}/g, '$1******')
+    .replace(/(验证码\s*(?:是(?!否)|为|:|：)?\s*)[A-Za-z0-9]{4,8}/g, '$1****')
+    .replace(/(?<![\dA-Za-z])\d{4,8}(?![\dA-Za-z])/g, (m, _off: number, all: string) => (aggressive && /密码|验证码/.test(all) ? '*'.repeat(m.length) : m));
 }
 
 export interface ClauseAnalysis { text: string; hits: ComplianceHit[]; educational: boolean; substantive: boolean; entities: string[] }
@@ -150,6 +165,9 @@ export interface ComplianceAnalysis {
   notes: string[];
   /** 反诈/识别类问法（怎么判断是不是骗局） */
   fraudEdu: boolean;
+  /** 用户发送了本人敏感信息（身份证/卡号/手机号/密码） */
+  selfPii: boolean;
+  handoffReason: string;
 }
 
 const VIOLATION_CATS: ComplianceCategory[] = ['stock_pick', 'price_prediction', 'return_promise', 'managed_account', 'insider_manip', 'privacy'];
@@ -203,6 +221,8 @@ function analyzeClause(raw: string, carry: string[]): ClauseAnalysis {
   // —— 隐私
   const pv = firstMatch(PRIVACY, s) ?? (PRIVACY_ASK.test(s) ? s.match(PRIVACY_OWNER)?.[0] ?? null : null);
   if (pv && !edu) add(hit('privacy', 'high', pv));
+  const pn = s.match(PRIVACY_BY_NUMBER); if (pn) add(hit('privacy', 'high', '以号码查询他人信息'));
+  if (PII_SECRET.test(s)) add(hit('privacy', 'medium', '密码/验证码（已脱敏）'));
   if (PII_ID.test(s)) add(hit('privacy', 'medium', '身份证号（已脱敏）'));
   else if (PII_CARD.test(s)) add(hit('privacy', 'medium', '银行卡号（已脱敏）'));
   else if (PII_PHONE.test(s)) add(hit('privacy', 'medium', '手机号（已脱敏）'));
@@ -305,7 +325,10 @@ export function analyzeInput(question: string): ComplianceAnalysis {
     if (!ex) hits.push(h);
     else if (sevRank(h.severity) > sevRank(ex.severity)) Object.assign(ex, h);
   }
-  let violations = hits.filter((h) => isViolation(h.category));
+  // 用户发出的"本人"敏感信息（severity=medium 的隐私命中）：记告警、提醒勿发，但不因此拒答正常问题
+  const selfPii = hits.some((h) => h.category === 'privacy' && h.severity === 'medium');
+  let violations = hits.filter((h) => isViolation(h.category) && !(h.category === 'privacy' && h.severity === 'medium'));
+  const selfAccount = !violations.length && SELF_ACCOUNT.test(s);
   // 反诈问法 + 仅内幕/荐股群类命中（"群里说某票有重组消息，可信吗"）：仍记告警，但按"识别方法"科普作答（partial_refusal）
   // 泛化的产品推荐请求（"有什么好的理财推荐"，无具体证券）：记告警、不推荐产品，改为讲风险等级与适当性
   const productEdu = !entities0(clauses) && violations.length > 0 && violations.every((h) => h.category === 'stock_pick' && /(理财|基金|产品)/.test(h.matched) && !/(股票|股|票|标的|板块)$/.test(h.matched));
@@ -316,6 +339,8 @@ export function analyzeInput(question: string): ComplianceAnalysis {
   const notes: string[] = [];
   let verdict: ComplianceAnalysis['verdict'] = 'clean';
   if (complaint) verdict = 'handoff';
+  else if (selfAccount && !violations.length) verdict = 'handoff';
+  else if (selfPii && !violations.length && !compliant.length && !injection) verdict = 'refuse';
   else if (violations.length) verdict = compliant.length || insiderEdu || productEdu ? 'mixed' : 'refuse';
   else if (injection) verdict = compliant.length ? 'clean' : 'refuse';
   const entities = [...new Set(clauses.flatMap((c) => c.entities))];
@@ -324,10 +349,13 @@ export function analyzeInput(question: string): ComplianceAnalysis {
   if (verdict === 'mixed') notes.push('混合问题：越界部分拒答，知识部分作答');
   if (injection) notes.push('检测到提示注入，已忽略注入指令');
   if (productEdu) notes.push('泛化产品推荐请求：不推荐具体产品，改为讲风险等级与适当性');
+  if (selfPii) notes.push('用户发送了本人敏感信息：已脱敏，提醒勿在对话中发送');
+  if (selfAccount && !complaint) notes.push('本人账户事务（需核实身份）→ 转人工');
   if (insiderEdu) notes.push('反诈识别类问法：不评价消息真假与个股，改为讲识别方法');
   for (const h of hits) h.matched = maskPII(h.matched, true).replace(/(?<!\d)\d{6}(?!\d)/g, (m) => (SECRET_CTX.test(s) ? '******' : m));
   return {
-    hits, violations, injection, complaint, verdict, clauses, entities, notes, fraudEdu,
+    hits, violations, injection, complaint, verdict, clauses, entities, notes, fraudEdu, selfPii,
+    handoffReason: complaint ? '用户要求人工服务或投诉' : selfAccount ? '本人账户事务需核实身份' : '',
     compliantText: insiderEdu && !compliant.length ? '如何识别非法荐股群和虚假内幕消息、重组消息'
       : productEdu && !compliant.length ? '如何根据产品风险等级与自身风险承受能力选择理财产品，常见基金类型的风险等级'
       : (injection || violations.length ? compliant.map((c) => c.text).join('，') : s) || s,
