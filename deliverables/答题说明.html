@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>答题说明 · 知界</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>答题说明 · 有据</title>
 <style>
 @page { size: A4; margin: 16mm 15mm; }
 body { font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif; color: #1c2430; font-size: 10.5pt; line-height: 1.6; margin: 0; }
@@ -16,14 +16,16 @@ ul { margin: 4px 0; padding-left: 18px; } li { margin: 2px 0; }
 .note { color: #5b6675; font-size: 9pt; }
 </style></head><body>
 
-<h1>知界 · 合规投教助手</h1>
-<div class="sub">AI 投顾 / 智能问答运营与合规边界 · 场景：券商 App 内「投教助手」+ 运营后台（券商为虚构的「示例证券」，知识库为匿名构造）</div>
+<h1>有据 · 投资问答助手</h1>
+<div class="sub">有据可查的投资问答助手 · 示例证券。题目：AI 投顾 / 智能问答运营与合规边界；场景：券商 App 内「投教助手」+ 运营后台（券商为虚构的「示例证券」，知识库为匿名构造）</div>
+
+<p><b>投资问题，有据可答。</b>开户、交易规则、产品知识随问随答；每句回答可点开出处；涉及风险较高的产品按用户风险等级提示；答不了直接转人工。合规要求作为内置底线在后台运行，见下方「核心设计」。项目原名「知界」，旧域名已跳转到新地址。</p>
 
 <h2>提交物</h2>
 <table>
-<tr><th>Web 产品（主站）</th><td><a href="https://zhijie-qa.pages.dev">https://zhijie-qa.pages.dev</a>　用户端 <code>#/app</code>，运营后台 <code>#/ops</code>，打开即用，无需账号或 key</td></tr>
-<tr><th>Web 产品（镜像）</th><td><a href="https://neal122234.github.io/zhijie-ai-advisor-qa/">https://neal122234.github.io/zhijie-ai-advisor-qa/</a>　主站接口不可达时自动切浏览器内「本地演示模式」</td></tr>
-<tr><th>源代码仓库</th><td><a href="https://github.com/Neal122234/zhijie-ai-advisor-qa">https://github.com/Neal122234/zhijie-ai-advisor-qa</a>（压缩包内另附源码快照 <code>source.zip</code>）</td></tr>
+<tr><th>Web 产品（主站）</th><td><a href="https://youju-ai.pages.dev">https://youju-ai.pages.dev</a>　用户端 <code>#/app</code>，运营后台 <code>#/ops</code>，打开即用，无需账号或 key</td></tr>
+<tr><th>Web 产品（镜像）</th><td><a href="https://neal122234.github.io/youju-ai-advisor-qa/">https://neal122234.github.io/youju-ai-advisor-qa/</a>　主站接口不可达时自动切浏览器内「本地演示模式」</td></tr>
+<tr><th>源代码仓库</th><td><a href="https://github.com/Neal122234/youju-ai-advisor-qa">https://github.com/Neal122234/youju-ai-advisor-qa</a>（压缩包内另附源码快照 <code>source.zip</code>）</td></tr>
 <tr><th>README</th><td>仓库首页 / <code>README.md</code>：目标用户、核心设计、AI 角色、数据使用、已知边界与未做事项（含合规边界）</td></tr>
 <tr><th>演示视频</th><td><code>demo.mp4</code>（约 168 秒，1080p，配音 + 字幕），分镜 <code>demo-script.md</code></td></tr>
 <tr><th>AI 使用与验证记录</th><td><code>docs/AI使用与验证记录.md</code>，评测迭代 <code>docs/eval-log.md</code>，盲测 <code>docs/holdout.md</code></td></tr>
@@ -42,7 +44,7 @@ ul { margin: 4px 0; padding-left: 18px; } li { margin: 2px 0; }
 <table>
 <tr><th>知识入库</th><td>Markdown + front-matter（类别、产品风险等级、出处、生效日）；按小标题切分，bge-m3 向量化；每次发布生成 release，答案记录所用版本</td></tr>
 <tr><th>检索增强生成</th><td>向量 + BM25 混合检索；模型只依据资料作答，逐句标引用；逐句证据核验，无依据或含资料外数字的句子剔除</td></tr>
-<tr><th>合规边界</th><td>两层拦截：确定性规则引擎（荐股 / 预测 / 收益承诺 / 代客理财 / 内幕 / 隐私 / 注入）+ 规则放过时的 LLM 意图分类（只会多拦，不会放行）；输出侧再扫描；拒答话术取自知识库合规话术文档并引用</td></tr>
+<tr><th>内置合规底线</th><td>每次问答必经；两层拦截：确定性规则引擎（荐股 / 预测 / 收益承诺 / 代客理财 / 内幕 / 隐私 / 注入）+ 规则放过时的 LLM 意图分类（只会多拦，不会放行）；输出侧再扫描；拒答话术取自知识库合规话术文档并引用</td></tr>
 <tr><th>置信度与转人工</th><td>置信度 = 0.35 检索 + 0.25 覆盖 + 0.25 落地性 + 0.15 引用；≥0.62 作答，0.45–0.62 作答附核实提示，&lt;0.45 或知识未覆盖则转人工，并且不展示模型生成内容</td></tr>
 <tr><th>适当性</th><td>用户 C1–C5 与产品 R1–R5 比对，不匹配时给出提示；所有投资相关回答附统一风险提示</td></tr>
 <tr><th>运营闭环</th><td>答不出 / 低置信 / 差评自动归并为知识缺口；越界触发告警；转人工生成工单 → 起草知识 → 发布新版本 → 回归验证 → 缺口关闭；版本可 diff、可回滚</td></tr>
@@ -54,7 +56,7 @@ ul { margin: 4px 0; padding-left: 18px; } li { margin: 2px 0; }
 <tr><th>评测集外盲测</th><td>第三轮 10 句新问法：10/10 无越界、无编造（其中 1 处决策标签可优化，已写入已知边界）</td></tr>
 <tr><th>单元测试</th><td>208 个用例全部通过（合规规则、切分、检索、置信度、管线异常、接口），CI 测试不过则不发布</td></tr>
 <tr><th>接口异常</th><td>LLM 故障或超时 → 降级为原文摘录；向量服务故障 → 只用关键词检索；数据库故障 → 照常作答并标注；限流返回 429</td></tr>
-<tr><th>国内访问</th><td>站长工具 33 个国内节点：主站 24 个可访问（含杭州），镜像约 26 个；见 <code>docs/国内访问实测.md</code></td></tr>
+<tr><th>国内访问</th><td>站长工具 33 个国内节点（测的是同一基础设施的旧域名）：主站 24 个可访问（含杭州），镜像约 26 个；见 <code>docs/国内访问实测.md</code></td></tr>
 </table>
 
 <h2>已知边界（摘要，详见 README）</h2>

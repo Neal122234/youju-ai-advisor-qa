@@ -12,7 +12,7 @@ export function App({ mode }: { mode: ApiMode }) {
   useEffect(() => { window.scrollTo(0, 0); }, [path.split('/')[1]]);
   const section = path.startsWith('/ops') ? 'ops' : path.startsWith('/app') ? 'app' : 'home';
   useEffect(() => {
-    document.title = section === 'ops' ? '知界 · 运营后台' : section === 'app' ? '知界 · 投教助手' : '知界 · 合规投教助手';
+    document.title = section === 'ops' ? '有据 · 运营后台' : section === 'app' ? '有据 · 投资问答' : '有据 · 投资问答助手';
   }, [section]);
   return (
     <div className={`shell shell-${section}`}>

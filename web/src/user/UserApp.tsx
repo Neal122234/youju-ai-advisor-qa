@@ -14,8 +14,8 @@ const KIND_TONE: Record<string, string> = { normal: 'green', out: 'red', unknown
 
 function sessionId() {
   try {
-    let s = sessionStorage.getItem('zhijie.sid');
-    if (!s) { s = 's_' + Math.random().toString(36).slice(2, 10); sessionStorage.setItem('zhijie.sid', s); }
+    let s = sessionStorage.getItem('youju.sid');
+    if (!s) { s = 's_' + Math.random().toString(36).slice(2, 10); sessionStorage.setItem('youju.sid', s); }
     return s;
   } catch { return 's_anon'; }
 }
@@ -117,7 +117,7 @@ export function UserApp({ mode }: { mode: ApiMode }) {
   return (
     <div className="user-page">
       <div className="user-top">
-        <a className="brand sm" href="#/"><span className="brand-mark" /><span><b>知界</b><small>合规投教助手 · 示例证券</small></span></a>
+        <a className="brand sm" href="#/"><span className="brand-mark" /><span><b>有据</b><small>有据可查的投资问答助手 · 示例证券</small></span></a>
         <div className="user-top-r">
           <button className="btn sm only-mobile" onClick={() => setTipsOpen(true)}>演示提示</button>
           <a className="btn sm" href="#/ops">运营后台</a>
@@ -127,7 +127,7 @@ export function UserApp({ mode }: { mode: ApiMode }) {
         <div className="phone">
           <div className="phone-h">
             <a href="#/" className="icon-btn" aria-label="返回"><Icon name="arrowLeft" /></a>
-            <div className="phone-title"><b>投教助手</b><small>示例证券</small></div>
+            <div className="phone-title"><b>有据 · 投资问答</b><small>示例证券</small></div>
             <label className="risk-chip" title="风险承受等级（演示）">
               <select value={risk} onChange={(e) => setRisk(e.target.value as RiskLevel)} aria-label="风险承受等级">
                 {RISKS.map((x) => <option key={x.v} value={x.v}>{x.v}</option>)}
@@ -136,8 +136,8 @@ export function UserApp({ mode }: { mode: ApiMode }) {
           </div>
           <div className="phone-msgs" ref={listRef}>
             <div className="msg-sys">
-              <p>您好，我是示例证券投教助手，可以解答开户、交易规则、产品知识等问题。</p>
-              <p className="muted">我不提供个股推荐、涨跌预测或收益承诺。回答仅供学习参考，不构成投资建议。</p>
+              <p>您好，我是有据。开户、交易规则、产品知识都可以问我，每条回答都标有出处，点角标即可查看原文。</p>
+              <p className="muted">涉及风险较高的产品，我会按您的风险等级先作提示；资料里没有的问题会为您转人工客服。回答仅供学习参考，不构成投资建议。</p>
             </div>
             {msgs.length === 0 && (
               <div className="quick-chips">

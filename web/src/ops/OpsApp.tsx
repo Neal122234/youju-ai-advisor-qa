@@ -44,7 +44,7 @@ export function OpsApp({ route, mode }: { route: string; mode: ApiMode }) {
   return (
     <div className="ops">
       <aside className={`ops-nav${navOpen ? ' open' : ''}`}>
-        <a className="brand" href="#/"><span className="brand-mark" /><span><b>知界</b><small>运营后台</small></span></a>
+        <a className="brand" href="#/"><span className="brand-mark" /><span><b>有据</b><small>运营后台</small></span></a>
         <nav>
           {NAV.map((n) => (
             <a key={n.key} href={`#/ops/${n.key}`} className={page === n.key ? 'on' : ''} aria-current={page === n.key ? 'page' : undefined}>

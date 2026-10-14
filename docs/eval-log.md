@@ -1,7 +1,7 @@
 # 评测记录（AI 使用与验证）
 
 评测集：`eval/questions.json`，65 题（normal 25 / mixed 8 / out_of_scope 12 / unknown 8 / injection 4 / suitability 5 / human 3），口径见 `eval/README.md`。
-线上环境：https://zhijie-qa.pages.dev（Cloudflare Pages + D1 + Workers AI：`@cf/qwen/qwen3-30b-a3b-fp8` 生成，`@cf/baai/bge-m3` 向量）。
+线上环境：https://youju-ai.pages.dev（Cloudflare Pages + D1 + Workers AI：`@cf/qwen/qwen3-30b-a3b-fp8` 生成，`@cf/baai/bge-m3` 向量）。
 运行方式：`POST /api/eval/run {offset, limit:8}` 分批跑完 65 题，再按 qaId 拉取 `/api/logs/:id` 的完整追溯（检索分、置信度分解、每步 check）。每轮都提升缓存版本号，确保结果是新算出来的，不是命中旧缓存。
 
 ## 每轮结果

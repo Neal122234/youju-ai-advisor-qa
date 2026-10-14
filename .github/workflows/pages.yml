@@ -25,7 +25,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
-          VITE_API_BASE: https://zhijie-qa.pages.dev
+          VITE_API_BASE: https://youju-ai.pages.dev
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

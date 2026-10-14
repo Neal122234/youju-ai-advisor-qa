@@ -1,4 +1,4 @@
-/* 知界 · 设计令牌：冷灰纸面 + 深蓝灰主色 + 朱红警示；决策色固定 */
+/* 有据 · 设计令牌：冷灰纸面 + 深蓝灰主色 + 朱红警示；决策色固定 */
 :root {
   --bg: #f3f5f7;
   --surface: #ffffff;
@@ -69,11 +69,8 @@ mark { background: var(--red-bg); color: var(--red); padding: 0 2px; border-radi
 .brand b { font-size: 16px; letter-spacing: .08em; display: block; line-height: 1.2; }
 .brand small { display: block; font-size: 11px; color: var(--ink-3); line-height: 1.3; }
 .brand.sm b { font-size: 15px; }
-.brand-mark { width: 26px; height: 26px; border-radius: 6px; background: var(--brand); position: relative; flex: none; display: inline-block; }
-.brand-mark::before, .brand-mark::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2.5px; background: var(--surface); border-radius: 2px; }
-.brand-mark::before { top: 7px; }
-.brand-mark::after { bottom: 7px; }
-.brand-mark { background-image: linear-gradient(var(--surface), var(--surface)); background-size: 2.5px 12px; background-position: center; background-repeat: no-repeat; }
+.brand-mark { width: 26px; height: 26px; border-radius: 6px; background: var(--brand); color: var(--surface); flex: none; display: inline-grid; place-items: center; }
+.brand-mark::before { content: "据"; font-size: 15px; font-weight: 700; line-height: 1; }
 
 /* ---------- 基础控件 ---------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--r-m); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 500; white-space: nowrap; }
@@ -193,19 +190,30 @@ button.cite:hover, .cite.on { background: var(--brand); color: var(--surface); }
 .l-cta { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
 .l-status { margin-top: 14px; font-size: 12px; color: var(--ink-3); }
 
-/* 边界示意：一条竖线把问题分到两侧 */
-.boundary { margin: 0; background: var(--surface); border-radius: var(--r-l); box-shadow: var(--shadow); padding: 16px 18px 14px; }
-.b-cols { display: grid; grid-template-columns: 1fr 1fr; font-size: 12px; color: var(--ink-3); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-.b-cols span:last-child { text-align: right; color: var(--alert); }
-.b-field { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 0; }
-.b-line { position: absolute; top: 0; bottom: 0; left: 58%; border-left: 2px dashed var(--alert); opacity: .55; }
-.b-q { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-m); background: var(--surface-2); border: 1px solid var(--line); font-size: 12.5px; max-width: 66%; }
-.b-q .dtag { flex: none; }
-.b-q .b-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.b-q.side-in { justify-self: start; }
-.b-q.side-edge { justify-self: start; margin-left: 30%; max-width: 58%; background: var(--surface); }
-.b-q.side-out { justify-self: end; max-width: 40%; }
-.boundary figcaption { font-size: 12px; color: var(--ink-3); border-top: 1px solid var(--line); padding-top: 8px; }
+/* 一个回答是怎么来的：问题 → 出处 → 作答，左侧一条引线串起三步 */
+.answer-trace { margin: 0; background: var(--surface); border-radius: var(--r-l); box-shadow: var(--shadow); padding: 16px 18px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.t-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; position: relative; }
+.t-steps::before { content: ""; position: absolute; left: 15px; top: 14px; bottom: 14px; border-left: 1.5px solid var(--line-2); }
+.t-row { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; align-items: start; position: relative; }
+.t-k { width: 32px; height: 22px; margin-top: 4px; border-radius: 11px; background: var(--surface); border: 1.5px solid var(--brand-2); color: var(--brand); font-size: 11px; font-weight: 600; display: grid; place-items: center; position: relative; }
+.t-ask { justify-self: start; background: var(--brand); color: #fff; padding: 6px 12px; border-radius: 12px 12px 12px 4px; font-size: 13.5px; }
+.t-doc { border: 1px solid var(--line); border-left: 3px solid var(--brand-2); border-radius: var(--r-m); background: var(--surface-2); padding: 8px 12px; display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-2); line-height: 1.75; }
+.t-doc-h { display: flex; align-items: center; gap: 4px; color: var(--ink); font-size: 13px; }
+.t-doc-h .cite { margin-left: 0; }
+.t-doc mark { background: var(--yellow-bg); color: var(--ink); padding: 0 1px; }
+.t-doc small { font-size: 11px; color: var(--ink-3); }
+.t-ans { display: grid; gap: 6px; font-size: 13px; line-height: 1.75; }
+.t-risk { display: flex; gap: 6px; align-items: flex-start; padding: 6px 10px; border-radius: var(--r-m); background: var(--orange-bg); color: var(--orange); font-size: 12px; line-height: 1.6; }
+.t-risk svg, .t-else svg { flex: none; margin-top: 3px; }
+.t-else { display: flex; gap: 6px; align-items: flex-start; margin: 0; padding: 8px 10px; border-radius: var(--r-m); background: var(--blue-bg); color: var(--blue); font-size: 12px; line-height: 1.6; }
+.answer-trace figcaption { font-size: 11.5px; color: var(--ink-3); border-top: 1px solid var(--line); padding-top: 8px; }
+.l-ops { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.l-ops li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; color: var(--ink-2); line-height: 1.7; }
+.l-ops li svg { margin-top: 4px; color: var(--brand-2); }
+.l-ops b { color: var(--ink); margin-right: 6px; }
+.l-base { padding: 22px 0 24px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 28px; }
+.l-base h2 { font-size: 15px; color: var(--ink-2); }
+.l-base p { font-size: 13px; color: var(--ink-2); line-height: 1.85; max-width: 52em; }
 
 .l-users { display: grid; grid-template-columns: 160px 1fr 1fr; gap: 28px; padding: 28px 0; border-top: 1px solid var(--line); }
 .l-users h2, .l-flow h2 { font-size: 18px; }
@@ -248,7 +256,7 @@ button.cite:hover, .cite.on { background: var(--brand); color: var(--surface); }
 .quick-chips button { border: 1px solid var(--line-2); background: var(--surface); border-radius: 14px; padding: 4px 10px; font-size: 12px; color: var(--brand); text-align: left; }
 .quick-chips button:hover { border-color: var(--brand-2); }
 .bubble-u { align-self: flex-end; max-width: 82%; background: var(--brand); color: #fff; padding: 8px 12px; border-radius: 14px 14px 4px 14px; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
-@media (prefers-color-scheme: dark) { .bubble-u { color: #0f1620; } }
+@media (prefers-color-scheme: dark) { .bubble-u, .t-ask { color: #0f1620; } }
 .answer { align-self: stretch; background: var(--surface); border-radius: 4px 14px 14px 14px; padding: 10px 12px; box-shadow: var(--shadow); font-size: 13.5px; }
 .answer-h { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
 .answer.d-refused { border-left: 3px solid var(--red); }
@@ -489,7 +497,7 @@ a.kpi:hover { text-decoration: none; box-shadow: 0 0 0 1px var(--brand-2); }
 @media (max-width: 900px) {
   .only-narrow { display: inline-grid !important; }
   .l-hero { grid-template-columns: minmax(0, 1fr); gap: 28px; }
-  .l-users { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .l-users, .l-base { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .flow-out { grid-template-columns: minmax(0, 1fr); }
   .ops { grid-template-columns: minmax(0, 1fr); }
   .ops-nav { position: fixed; left: 0; top: 0; bottom: 0; width: 240px; z-index: 50; transform: translateX(-100%); transition: transform .2s ease; height: auto; }
@@ -510,10 +518,7 @@ a.kpi:hover { text-decoration: none; box-shadow: 0 0 0 1px var(--brand-2); }
 @media (max-width: 640px) {
   .landing { padding: 0 16px; }
   .l-nav { gap: 14px; }
-  .b-line { left: 62%; }
-  .b-q { max-width: 100% !important; margin-left: 0 !important; }
-  .b-q.side-out { max-width: 70% !important; }
-  .b-q.side-edge { margin-left: 12% !important; max-width: 88% !important; }
+  .answer-trace { padding: 14px 12px 10px; }
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .user-top { padding: 6px 12px; }

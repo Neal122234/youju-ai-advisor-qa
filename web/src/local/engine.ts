@@ -39,7 +39,7 @@ interface State {
   v: 1; releaseNo: number; releases: Release[]; docs: DocMeta[]; versions: DocVersion[];
   logs: LogRec[]; alerts: Alert[]; gaps: Gap[]; tickets: Ticket[];
 }
-const KEY = 'zhijie.local.v2';
+const KEY = 'youju.local.v2';
 let state: State | null = null;
 let chunkCache: Chunk[] | null = null;
 

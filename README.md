@@ -1,22 +1,26 @@
-# 知界 · 合规投教助手
+# 有据 · 投资问答助手
 
-券商 App 内的投资者教育问答助手：只依据审核过的知识库作答、每句可追溯出处；荐股、涨跌预测、收益承诺、代客理财等越界请求由规则引擎加 LLM 意图分类两层拦截并告警；答不了的转人工并沉淀为知识缺口，运营补知识、发版、回归验证后闭环。
+**投资问题，有据可答。** 有据是券商 App 里的投资问答助手：开户、交易规则、产品知识随问随答；每句回答都标注出处，点开即见知识库原文；涉及风险较高的产品时按用户的风险等级给出适当性提示；资料覆盖不到的问题不硬答，一键转人工。运营侧，每次回答可完整追溯，用户问倒的问题自动沉淀为知识缺口，补知识、发版后用评测集回归验证，风险请求自动告警。
+
+不荐股、不预测涨跌、不承诺收益、不代客理财等合规要求作为内置底线在后台运行（规则引擎 + LLM 意图分类两层拦截并留痕），设计细节见「核心设计」，边界与未做事项见「已知边界与未做事项」。
 
 场景中的券商为虚构的「示例证券」，知识库为匿名构造的示例数据。
 
-演示视频：[deliverables/demo.mp4](deliverables/demo.mp4)（约 168 秒，1080p，配音 + 字幕），分镜与旁白稿见 [deliverables/demo-script.md](deliverables/demo-script.md)。视频录制于评测集 80 题时，评测页显示 80/80；当前评测集为 86 题，最终结果见下文「评测结果」。
+演示视频：[deliverables/demo.mp4](deliverables/demo.mp4)（约 168 秒，1080p，配音 + 字幕），分镜与旁白稿见 [deliverables/demo-script.md](deliverables/demo-script.md)。视频录制于改名前，画面中的产品名为原名「知界」、地址为旧域名 zhijie-qa.pages.dev（现已 301 跳转到新域名）。视频录制于评测集 80 题时，评测页显示 80/80；当前评测集为 86 题，最终结果见下文「评测结果」。
 
 | 入口 | 地址 | 说明 |
 |---|---|---|
-| 主站 | https://zhijie-qa.pages.dev | Cloudflare Pages + Functions + D1 + Workers AI，完整链路 |
-| 镜像 | https://neal122234.github.io/zhijie-ai-advisor-qa/ | GitHub Pages 同一前端；先探测主站 API（2.5s 超时），不可达时自动切到**浏览器内本地演示模式**（无大模型、无向量，BM25 检索 + 原文摘录，顶部黄条标注） |
-| 仓库 | https://github.com/Neal122234/zhijie-ai-advisor-qa | |
+| 主站 | https://youju-ai.pages.dev | Cloudflare Pages + Functions + D1 + Workers AI，完整链路 |
+| 镜像 | https://neal122234.github.io/youju-ai-advisor-qa/ | GitHub Pages 同一前端；先探测主站 API（2.5s 超时），不可达时自动切到**浏览器内本地演示模式**（无大模型、无向量，BM25 检索 + 原文摘录，顶部黄条标注） |
+| 仓库 | https://github.com/Neal122234/youju-ai-advisor-qa | |
 
-在主站地址后加 `?mode=local`（如 `https://zhijie-qa.pages.dev/?mode=local#/app`）可强制进入本地演示模式。
+项目原名「知界」，旧域名 https://zhijie-qa.pages.dev 已 301 跳转到主站；D1 数据库沿用原名 `zhijie-qa`（见 wrangler.toml 的 `database_name`）。
+
+在主站地址后加 `?mode=local`（如 `https://youju-ai.pages.dev/?mode=local#/app`）可强制进入本地演示模式。
 
 ## 30 秒体验
 
-打开用户端 `#/app`（主站：https://zhijie-qa.pages.dev/#/app ），左上角风险等级默认 C3，点快捷问题：
+打开用户端 `#/app`（主站：https://youju-ai.pages.dev/#/app ），右上角风险等级默认 C3。先问一个规则问题看"有据"怎么作答，再试几个边缘问题看它如何处理：
 
 | 点这个快捷问题 | 看什么 |
 |---|---|
@@ -208,7 +212,7 @@ flowchart TD
 | `db` | 所有 D1 调用抛错 | 检索回退内置知识包；落库失败只记 `checks.persistence`，chat 照常返回 |
 
 ```bash
-curl -s https://zhijie-qa.pages.dev/api/chat -H 'content-type: application/json' -H 'x-fault: llm' \
+curl -s https://youju-ai.pages.dev/api/chat -H 'content-type: application/json' -H 'x-fault: llm' \
   -d '{"question":"ETF和LOF有什么区别？","userRisk":"C3","sessionId":"demo"}'
 ```
 
@@ -238,19 +242,19 @@ curl -X POST http://localhost:8788/api/admin/seed      # 本地未设 ADMIN_TOKE
 部署到 Cloudflare Pages：
 
 ```bash
-npx wrangler d1 create zhijie-qa                       # 把输出的 database_id 写进 wrangler.toml
+npx wrangler d1 create zhijie-qa                       # D1 沿用原名；把输出的 database_id 写进 wrangler.toml
 npx wrangler d1 execute zhijie-qa --remote --file db/schema.sql   # 可选，seed 会自动建表
 npm run build
-npx wrangler pages deploy dist --project-name zhijie-qa
-npx wrangler pages secret put ADMIN_TOKEN --project-name zhijie-qa
+npx wrangler pages deploy dist --project-name youju-ai
+npx wrangler pages secret put ADMIN_TOKEN --project-name youju-ai
 # 分批 seed（免费计划单请求有 CPU/子请求限制，每批向量化 50 块），直到 done=true
 B=0; while [ "$B" != "None" ] && [ "$B" != "null" ]; do
-  R=$(curl -s -X POST "https://zhijie-qa.pages.dev/api/admin/seed?batch=$B" -H "x-admin-token: $ADMIN_TOKEN"); echo "$R"
+  R=$(curl -s -X POST "https://youju-ai.pages.dev/api/admin/seed?batch=$B" -H "x-admin-token: $ADMIN_TOKEN"); echo "$R"
   B=$(echo "$R" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("nextBatch"))')
 done
 ```
 
-GitHub Pages 镜像：`.github/workflows/pages.yml` 在 push 到 main 时 `npm ci → npm test → npm run build`（`VITE_BASE=/仓库名/`，`VITE_API_BASE=https://zhijie-qa.pages.dev`）并发布 `dist/`。
+GitHub Pages 镜像：`.github/workflows/pages.yml` 在 push 到 main 时 `npm ci → npm test → npm run build`（`VITE_BASE=/仓库名/`，`VITE_API_BASE=https://youju-ai.pages.dev`）并发布 `dist/`。
 
 ## 目录结构
 
@@ -325,7 +329,7 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 
 ## 国内访问
 
-2026-10-14 用站长工具做国内多节点测速：主站在 33 个节点中有 24 个返回 200，平均响应 2.5 s；镜像约 26 个节点可连通，平均 1.8 s。两者超时的基本是同一批节点。详见 [docs/国内访问实测.md](docs/国内访问实测.md)。打不开主站时请换镜像；镜像也连不上主站 API 时，会自动进入本地演示模式。
+2026-10-14 用站长工具做国内多节点测速（针对改名前的旧域名 zhijie-qa.pages.dev，同一基础设施；新域名测速稍后补）：主站在 33 个节点中有 24 个返回 200，平均响应 2.5 s；镜像约 26 个节点可连通，平均 1.8 s。两者超时的基本是同一批节点。详见 [docs/国内访问实测.md](docs/国内访问实测.md)。打不开主站时请换镜像；镜像也连不上主站 API 时，会自动进入本地演示模式。
 
 ## 评测结果
 

@@ -24,7 +24,7 @@ async function cacheGet(key: string): Promise<ChatResponse | null> {
   const m = memCache.get(key);
   if (m && Date.now() - m.at < CACHE_TTL_MS) return structuredClone(m.resp);
   try {
-    const hit = await edgeCache().match(`https://zhijie-cache.internal/chat/${key}`);
+    const hit = await edgeCache().match(`https://youju-cache.internal/chat/${key}`);
     if (hit) return (await hit.json()) as ChatResponse;
   } catch { /* Cache API 不可用时忽略 */ }
   return null;
@@ -33,7 +33,7 @@ async function cachePut(key: string, resp: ChatResponse) {
   memCache.set(key, { at: Date.now(), resp: structuredClone(resp) });
   if (memCache.size > 500) { const oldest = memCache.keys().next().value; if (oldest) memCache.delete(oldest); }
   try {
-    await edgeCache().put(`https://zhijie-cache.internal/chat/${key}`, new Response(JSON.stringify(resp), { headers: { 'content-type': 'application/json', 'cache-control': `max-age=${CACHE_TTL_MS / 1000}` } }));
+    await edgeCache().put(`https://youju-cache.internal/chat/${key}`, new Response(JSON.stringify(resp), { headers: { 'content-type': 'application/json', 'cache-control': `max-age=${CACHE_TTL_MS / 1000}` } }));
   } catch { /* ignore */ }
 }
 

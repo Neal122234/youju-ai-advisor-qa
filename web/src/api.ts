@@ -231,12 +231,12 @@ const qs = (p: Record<string, any>) => {
   return s ? '?' + s : '';
 };
 
-/** 故障注入（演示用）：值写入 sessionStorage `zhijie.fault`，chat 请求带 x-fault 头 */
+/** 故障注入（演示用）：值写入 sessionStorage `youju.fault`，chat 请求带 x-fault 头 */
 export function getFault(): string {
-  try { return sessionStorage.getItem('zhijie.fault') ?? ''; } catch { return ''; }
+  try { return sessionStorage.getItem('youju.fault') ?? ''; } catch { return ''; }
 }
 export function setFault(v: string) {
-  try { v ? sessionStorage.setItem('zhijie.fault', v) : sessionStorage.removeItem('zhijie.fault'); } catch { /* ignore */ }
+  try { v ? sessionStorage.setItem('youju.fault', v) : sessionStorage.removeItem('youju.fault'); } catch { /* ignore */ }
 }
 
 export const remoteApi: ApiClient = {

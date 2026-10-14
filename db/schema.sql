@@ -1,4 +1,4 @@
--- 知界 D1 表结构（SPEC §6）。幂等：可重复执行。
+-- 有据 D1 表结构（SPEC §6）。幂等：可重复执行。
 -- 本地：npx wrangler d1 execute zhijie-qa --local --file db/schema.sql
 -- 线上：npx wrangler d1 execute zhijie-qa --remote --file db/schema.sql
 
