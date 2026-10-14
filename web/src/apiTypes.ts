@@ -65,6 +65,8 @@ export interface DocDetail { doc: KbDoc; versions: DocVersion[] }
 export interface DocInput {
   docKey?: string; title: string; category: string; productRisk: ProductRisk | null;
   tags: string[]; content: string; changeNote: string; gapId?: string | null;
+  /** 正在编辑的草稿版本 id：传了且仍是草稿时，后端应原地更新这份草稿而不是新建版本 */
+  versionId?: string | null;
 }
 export interface Release { id: string; releaseNo: string; note: string; docVersions: string[]; createdAt: string; createdBy: string }
 export interface PreviewChunk { ord: number; heading: string; text: string }

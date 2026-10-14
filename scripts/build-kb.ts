@@ -43,5 +43,12 @@ writeFileSync(META_OUT, JSON.stringify(meta, null, 2) + '\n');
 const schema = readFileSync(join(ROOT, 'db/schema.sql'), 'utf8');
 mkdirSync(join(ROOT, 'functions/_generated'), { recursive: true });
 writeFileSync(join(ROOT, 'functions/_generated/schema.ts'), `// 由 scripts/build-kb.ts 从 db/schema.sql 生成，勿手改\nexport const SCHEMA_SQL = ${JSON.stringify(schema)};\n`);
+// db/embeddings.v1.json（预计算向量，可选）→ functions/_generated/embeddings.json；没有时写空表，seed 会回退调用 AI
+const embSrc = join(ROOT, 'db/embeddings.v1.json');
+let emb = '{"model":"@cf/baai/bge-m3","dims":0,"format":"f16-base64","exportedAt":"","source":"none","chunks":{}}';
+try { emb = readFileSync(embSrc, 'utf8'); } catch { /* 文件不存在：空表 */ }
+writeFileSync(join(ROOT, 'functions/_generated/embeddings.json'), emb);
+const embCount = Object.keys(JSON.parse(emb).chunks ?? {}).length;
+console.log(`预计算向量：${embCount} 块 → functions/_generated/embeddings.json`);
 console.log(`kb-bundle: ${docs.length} docs, ${chunks.length} chunks (avg ${meta.avgChunkChars} 字, max ${meta.maxChunkChars} 字) → ${OUT.replace(ROOT + '/', '')}`);
 for (const w of warnings) console.warn('  ⚠', w);

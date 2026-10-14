@@ -9,8 +9,8 @@ import { SourceSheet } from './SourceSheet';
 import { FAQ_GROUPS, followUps, renumberCitations } from './suggest';
 
 type Msg =
-  | { id: string; ts: number; role: 'user'; text: string }
-  | { id: string; ts: number; role: 'assistant'; resp: ChatResponse; question: string; fresh: boolean }
+  | { id: string; ts: number; role: 'user'; text: string; asRisk?: RiskLevel }
+  | { id: string; ts: number; role: 'assistant'; resp: ChatResponse; question: string; fresh: boolean; fb?: 'up' | 'down' }
   | { id: string; ts: number; role: 'error'; text: string; retry: string; risk: RiskLevel };
 
 const MAX_LEN = 500;
@@ -86,17 +86,23 @@ export function UserApp({ mode }: { mode: ApiMode }) {
   const sid = useRef(sessionId());
   useVisualViewportHeight();
 
-  // 深链：#/app?q=问题&risk=C2 自动提问（便于演示与录屏）
+  // 深链：#/app?q=问题&risk=C2 自动提问（便于演示与录屏）；整页打开和用户端内改 hash 都生效
+  const askRef = useRef<typeof ask>(null!);
   useEffect(() => {
-    const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
-    const q = qs.get('q');
-    const rk = qs.get('risk') as RiskLevel | null;
-    if (q) {
+    const handle = () => {
+      if (!location.hash.startsWith('#/app')) return;
+      const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
+      const q = qs.get('q');
+      const rk = qs.get('risk') as RiskLevel | null;
+      if (!q) return;
       // 去掉深链参数，避免从追溯页返回时重复提问
       history.replaceState(history.state, '', '#/app');
-      ask(q, rk && /^C[1-5]$/.test(rk) ? rk : undefined);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      askRef.current(q, rk && /^C[1-5]$/.test(rk) ? rk : undefined);
+    };
+    handle();
+    window.addEventListener('hashchange', handle);
+    return () => window.removeEventListener('hashchange', handle);
+  }, []);
 
   // 发送中阶段提示
   useEffect(() => {
@@ -142,17 +148,18 @@ export function UserApp({ mode }: { mode: ApiMode }) {
     ta.style.height = `${Math.min(ta.scrollHeight, 116)}px`;
   }, [input]);
 
-  async function ask(q: string, riskOverride?: RiskLevel, retryOf?: string) {
+  /** riskOverride：深链会切换风险等级；控制台示例（once=true）只对这一问生效，不改当前等级 */
+  async function ask(q: string, riskOverride?: RiskLevel, retryOf?: string, once = false) {
     const question = q.trim().slice(0, MAX_LEN);
     if (!question || busy) return;
     const r = riskOverride ?? risk;
-    if (riskOverride) setRisk(riskOverride);
+    if (riskOverride && !once) setRisk(riskOverride);
     if (!retryOf) setInput('');
     follow.current = true;
     const history = msgs.filter((m) => m.role !== 'error').slice(-4).map((m) => m.role === 'user' ? { role: 'user' as const, content: m.text } : { role: 'assistant' as const, content: (m as Extract<Msg, { role: 'assistant' }>).resp.answer });
     setMsgs((m) => {
       const base = retryOf ? m.filter((x) => x.id !== retryOf) : m;
-      return retryOf ? base : [...base, { id: 'u' + Date.now(), ts: Date.now(), role: 'user', text: question }];
+      return retryOf ? base : [...base, { id: 'u' + Date.now(), ts: Date.now(), role: 'user', text: question, ...(once && riskOverride && riskOverride !== risk ? { asRisk: riskOverride } : {}) }];
     });
     setBusy(true);
     try {
@@ -162,6 +169,8 @@ export function UserApp({ mode }: { mode: ApiMode }) {
       setMsgs((m) => [...m, { id: 'e' + Date.now(), ts: Date.now(), role: 'error', text: e?.message ?? '请求失败', retry: question, risk: r }]);
     } finally { setBusy(false); }
   }
+
+  askRef.current = ask;
 
   function newChat() {
     if (busy) return;
@@ -233,7 +242,7 @@ export function UserApp({ mode }: { mode: ApiMode }) {
               <div key={g.kind} className="kind-g">
                 <div className="kind-h"><span className={`pill tone-${KIND_TONE[g.kind]}`}>{g.label}</span><span className="muted small">{g.hint}</span></div>
                 {qs.map((q) => (
-                  <button key={q.question} className="kind-q" onClick={() => { ask(q.question, q.risk); setTipsOpen(false); }} disabled={busy}>
+                  <button key={q.question} className="kind-q" onClick={() => { ask(q.question, q.risk, undefined, true); setTipsOpen(false); if (q.risk && q.risk !== risk) toast(`本题以 ${q.risk} 身份提问，当前风险等级仍为 ${risk}`); }} disabled={busy}>
                     {q.question}{q.risk ? <span className="muted">（以 {q.risk} 身份）</span> : null}
                   </button>
                 ))}
@@ -298,7 +307,7 @@ export function UserApp({ mode }: { mode: ApiMode }) {
                 const divider = m.ts - prevTs > 5 * 60 * 1000;
                 prevTs = m.ts;
                 const time = divider ? <div className="time-div num" key={m.id + 't'}>{fmtTime(new Date(m.ts).toISOString(), false)}</div> : null;
-                if (m.role === 'user') return [time, <div key={m.id} className="bubble-u">{m.text}</div>];
+                if (m.role === 'user') return [time, <div key={m.id} className="bubble-u">{m.text}</div>, m.asRisk ? <div key={m.id + 'r'} className="as-risk">演示：本题以 {m.asRisk} 身份提问</div> : null];
                 if (m.role === 'assistant') return [time, (
                   <div key={m.id} data-mid={m.id} className="answer-slot">
                     <AnswerCard
@@ -307,6 +316,8 @@ export function UserApp({ mode }: { mode: ApiMode }) {
                       onAsk={(q) => ask(q)}
                       onSources={(n) => setSheet({ msgId: m.id, n })}
                       onTyped={() => onTyped(m.id)}
+                      feedback={m.fb ?? null}
+                      onFeedback={(v) => setMsgs((all) => all.map((x) => (x.id === m.id && x.role === 'assistant' ? { ...x, fb: v } : x)))}
                     />
                   </div>
                 )];
@@ -314,7 +325,7 @@ export function UserApp({ mode }: { mode: ApiMode }) {
                   <div key={m.id} className="msg-err" role="alert">
                     <Icon name="alert" size={15} />
                     <div className="msg-err-t"><b>没有收到回答</b><span>{m.text}</span></div>
-                    <button className="btn sm" onClick={() => ask(m.retry, m.risk, m.id)} disabled={busy}><Icon name="refresh" size={13} /> 重试</button>
+                    <button className="btn sm" onClick={() => ask(m.retry, m.risk, m.id, true)} disabled={busy}><Icon name="refresh" size={13} /> 重试</button>
                   </div>
                 )];
               })}

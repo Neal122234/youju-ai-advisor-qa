@@ -65,7 +65,8 @@ describe('正常作答（mock LLM）', () => {
   it('无引用 → citation 分 0、置信下降', async () => {
     const llm = async () => '{"answer":"科创板需满足日均资产不低于 50 万元，并有 24 个月交易经验。","used":[],"covered":true}';
     const r = await runPipeline(req('科创板开通条件'), makeAdapters({ llm }));
-    expect(r.confidenceBreakdown.citation).toBe(0);
+    // 模型没写角标：citation check 记'无引用'；系统按重合度补的引用计入最终引用分（R3-10）
+    expect(r.checks.find((c) => c.name === 'citation')!.detail).toMatch(/无引用|模型原始输出引用 0 处/);
   });
   it('LLM covered=false + 编造内容 → handoff_unknown，绝不展示生成内容', async () => {
     const llm = async () => '{"answer":"根据资料，火星交易所将于明年开放申购[1]。","used":[1],"covered":false}';

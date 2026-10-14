@@ -8,6 +8,20 @@ import { HttpError, isLocalRequest, json, nowIso } from '../../_lib/http';
 import { BUNDLE, all, first, invalidateKbCache } from '../../_lib/db';
 import { EMBED_BATCH, embedTexts, packEmbedding } from '../../_lib/ai';
 import { SCHEMA_SQL } from '../../_generated/schema';
+import precomputed from '../../_generated/embeddings.json';
+import { chunkFingerprint, decodeF16Base64, type EmbeddingBundle } from '../../../core/f16';
+
+let PRE = precomputed as unknown as EmbeddingBundle;
+/** 测试用：替换预计算向量表 */
+export function __setPrecomputed(b: EmbeddingBundle) { PRE = b; }
+
+/** 从预计算向量里取出与当前块内容一致（指纹相同）的向量；没有或内容已变返回 null */
+export function precomputedFor(id: string, heading: string, text: string, pre: EmbeddingBundle = PRE): number[] | null {
+  const e = pre.chunks?.[id];
+  if (!e || e.fp !== chunkFingerprint(heading, text)) return null;
+  const v = decodeF16Base64(e.v);
+  return v.length ? v : null;
+}
 
 /** 拆分 schema.sql 为单条语句（去注释） */
 export function schemaStatements(sql: string): string[] {
@@ -42,7 +56,17 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   // 2) 向量化（只补 embedding IS NULL 的块）
   const pendingAll = await all<{ id: string; heading: string; text: string; title: string }>(db,
     'SELECT c.id, c.heading, c.text, d.title FROM chunks c JOIN documents d ON d.doc_key = c.doc_key WHERE c.embedding IS NULL AND c.active = 1 ORDER BY c.id');
-  const work = !env.AI ? [] : batchParam !== null ? pendingAll.slice(0, EMBED_BATCH) : pendingAll;
+  // 先用预计算向量（db/embeddings.v1.json，经 build:kb 打包）直接写库，不调用 AI；只有缺失或内容已变的块才调用 AI
+  let fromBundle = 0;
+  const needAi: typeof pendingAll = [];
+  const preStmts: D1PreparedStatement[] = [];
+  for (const c of pendingAll) {
+    const v = precomputedFor(c.id, c.heading, c.text);
+    if (v) { preStmts.push(db.prepare('UPDATE chunks SET embedding = ? WHERE id = ?').bind(packEmbedding(v), c.id)); fromBundle++; }
+    else needAi.push(c);
+  }
+  for (let i = 0; i < preStmts.length; i += 50) await db.batch(preStmts.slice(i, i + 50));
+  const work = !env.AI ? [] : batchParam !== null ? needAi.slice(0, EMBED_BATCH) : needAi;
   let embedded = 0; let embedError: string | null = null;
   for (let i = 0; i < work.length; i += EMBED_BATCH) {
     const part = work.slice(i, i + EMBED_BATCH);
@@ -57,7 +81,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const total = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM chunks WHERE active = 1');
   const done = (left?.n ?? 0) === 0 || !env.AI;
   return json({
-    ok: !embedError, release: 'v1', docs: BUNDLE.docs.length, chunks: total?.n ?? 0, embeddedNow: embedded, pending: left?.n ?? 0, done,
+    ok: !embedError, release: 'v1', docs: BUNDLE.docs.length, chunks: total?.n ?? 0, embeddedNow: embedded + fromBundle, fromPrecomputed: fromBundle, fromAi: embedded, pending: left?.n ?? 0, done,
     nextBatch: done ? null : batchParam !== null ? Number(batchParam) + 1 : 0, embedError,
     note: env.AI ? undefined : '未绑定 AI：已导入文档与块，未向量化（检索走关键词模式）；绑定 AI 后再次调用即可补齐向量',
   }, embedError ? 502 : 200);

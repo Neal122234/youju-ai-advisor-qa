@@ -45,11 +45,15 @@ async function copyText(t: string) {
   }
 }
 
-export function AnswerCard({ resp, ts, animate, followUps, onAsk, onSources, showTech, onTyped, busy }: {
+export function AnswerCard({ resp, ts, animate, followUps, onAsk, onSources, showTech, onTyped, busy, feedback = null, onFeedback }: {
   resp: ChatResponse; ts: number; animate: boolean; followUps: string[]; showTech: boolean; busy: boolean;
   onAsk: (q: string) => void; onSources: (n: number | null) => void; onTyped?: () => void;
+  /** 已提交的反馈（随对话持久化）；提交后锁定，不可改 */
+  feedback?: 'up' | 'down' | null; onFeedback?: (v: 'up' | 'down') => void;
 }) {
-  const [fb, setFb] = useState<null | 'up' | 'down'>(null);
+  const [fb, setFb] = useState<null | 'up' | 'down'>(feedback);
+  useEffect(() => { if (feedback) setFb(feedback); }, [feedback]);
+  const [sending, setSending] = useState(false);
   const [badOpen, setBadOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -73,11 +77,14 @@ export function AnswerCard({ resp, ts, animate, followUps, onAsk, onSources, sho
   const st = statusOf(resp);
 
   async function sendFb(helpful: boolean) {
+    if (fb || sending) return;
+    setSending(true);
     try {
       await api.feedback(resp.id, helpful, helpful ? undefined : [reason, note].filter(Boolean).join('：'));
-      setFb(helpful ? 'up' : 'down'); setBadOpen(false);
+      const v = helpful ? 'up' : 'down';
+      setFb(v); setBadOpen(false); onFeedback?.(v);
       toast(helpful ? '感谢反馈' : '已记录，运营会据此补充知识', 'green');
-    } catch (e: any) { toast('反馈提交失败：' + (e?.message ?? ''), 'red'); }
+    } catch (e: any) { toast('反馈提交失败：' + (e?.message ?? ''), 'red'); } finally { setSending(false); }
   }
   async function copy() {
     const plain = body.replace(/\[\d+\]/g, '') + (notice ? `\n\n适当性提示：${notice}` : '');
@@ -122,8 +129,8 @@ export function AnswerCard({ resp, ts, animate, followUps, onAsk, onSources, sho
           <footer className="answer-f">
             <div className="acts">
               <button type="button" className="act" onClick={copy} aria-label="复制回答" title="复制"><Icon name="copy" size={15} /></button>
-              <button type="button" className={`act${fb === 'up' ? ' on' : ''}`} disabled={!!fb} onClick={() => sendFb(true)} aria-label="有帮助" aria-pressed={fb === 'up'} title="有帮助"><Icon name="thumbUp" size={15} /></button>
-              <button type="button" className={`act${fb === 'down' ? ' on bad' : ''}`} disabled={!!fb} onClick={() => setBadOpen((o) => !o)} aria-label="没帮助" aria-pressed={fb === 'down'} aria-expanded={badOpen} title="没帮助"><Icon name="thumbDown" size={15} /></button>
+              <button type="button" className={`act${fb === 'up' ? ' on' : ''}`} disabled={!!fb || sending} onClick={() => sendFb(true)} aria-label="有帮助" aria-pressed={fb === 'up'} title="有帮助"><Icon name="thumbUp" size={15} /></button>
+              <button type="button" className={`act${fb === 'down' ? ' on bad' : ''}`} disabled={!!fb || sending} onClick={() => setBadOpen((o) => !o)} aria-label="没帮助" aria-pressed={fb === 'down'} aria-expanded={badOpen} title="没帮助"><Icon name="thumbDown" size={15} /></button>
               {cites.length > 0 && (
                 <button type="button" className="act src-btn" onClick={() => onSources(null)}><Icon name="doc" size={14} /> 出处 {cites.length}</button>
               )}
@@ -143,7 +150,7 @@ export function AnswerCard({ resp, ts, animate, followUps, onAsk, onSources, sho
                 {BAD_REASONS.map((r) => <button type="button" key={r} className={reason === r ? 'on' : ''} aria-pressed={reason === r} onClick={() => setReason(r)}>{r}</button>)}
               </div>
               <textarea className="input" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="补充说明（选填）" maxLength={200} />
-              <div className="row-end"><button type="button" className="btn sm" onClick={() => setBadOpen(false)}>取消</button><button type="button" className="btn sm primary" onClick={() => sendFb(false)} disabled={!reason && !note}>提交反馈</button></div>
+              <div className="row-end"><button type="button" className="btn sm" onClick={() => setBadOpen(false)}>取消</button><button type="button" className="btn sm primary" onClick={() => sendFb(false)} disabled={(!reason && !note) || sending}>提交反馈</button></div>
             </div>
           )}
 

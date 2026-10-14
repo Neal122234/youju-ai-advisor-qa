@@ -111,11 +111,14 @@ export interface SentenceEvidence {
   missingTerms: string[];
   /** 与依据原句相比，否定/量词发生变化（"部分 ETF"→"ETF"、"不能"→"可以"） */
   qualifierChange: string | null;
+  /** 句子主体与依据原句主体不一致（句子讲 ETF，依据原句讲 LOF） */
+  subjectMismatch: string | null;
   supported: boolean;
   /** 所引块不支撑、但其它块高度重合 → 应改引最佳块 */
   recite: boolean;
 }
 export const SENT_SUPPORT = 0.35;   // 句子与资料的字二元组重合率下限
+export const SENT_SUPPORT_NUMERIC = 0.25;   // 句中数字全部在依据块中出现时的重合率下限
 export const SENT_AUTOCITE = 0.6;   // 无引用句自动补引用的重合率下限（还需无资料外数字/术语、无限定词变化）
 
 /** 泛化词不参与"关键术语"核验（几乎每段资料都会出现或可自然转述） */
@@ -139,7 +142,7 @@ function keyTerms(sentence: string): string[] {
 export const SYNONYMS: Record<string, string[]> = {
   两融: ['融资融券'], 融资融券: ['两融'], 爆仓: ['强制平仓', '平仓'], 货币基金: ['货币市场基金', '货币型'], 债券基金: ['债券型基金', '纯债', '债基'],
   股票型基金: ['股票基金'], 混合型基金: ['混合基金'], 开户: ['开立', '开通'], 销户: ['注销'], 转户: ['转托管'], etf: ['交易型开放式指数基金'],
-  lof: ['上市型开放式基金'], 赎回: ['申赎'], 申购: ['申赎'], 基金净值: ['净值'], 涨跌幅限制: ['涨跌幅'], 跌停: ['涨跌幅'], 涨停: ['涨跌幅'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
+  lof: ['上市型开放式基金'], 交易经验: ['参与证券交易', '证券交易', '交易满'], 资产要求: ['日均', '资产'], 赎回: ['申赎'], 申购: ['申赎'], 基金净值: ['净值'], 涨跌幅限制: ['涨跌幅'], 跌停: ['涨跌幅'], 涨停: ['涨跌幅'], 打新: ['新股申购'], 逆回购: ['国债逆回购'], 三方存管: ['第三方存管'], 新三板: ['全国股转'],
 };
 /** 产品/业务主体词（从具体到宽泛）。问题主体与被引资料主体不一致时（问基金分红税、资料讲股票红利税）判为不覆盖 */
 const SUBJECTS: string[][] = [
@@ -148,6 +151,14 @@ const SUBJECTS: string[][] = [
   ['可交换债'], ['可转债', '可转换公司债券'], ['国债期货'], ['国债逆回购', '逆回购'], ['国债'], ['股票期权', '期权'], ['期货'], ['融资融券', '两融', '融资', '融券'],
   ['港股通'], ['北交所', '北京证券交易所'], ['科创板'], ['创业板'], ['新三板'], ['b股'], ['美股'], ['港股'], ['新股', '打新', '申购新股'], ['基金'],
 ];
+/** 文本中出现的主体（各组首词），按出现位置排序 */
+export function subjectsIn(text: string): string[] {
+  const t = normalizeText(text).replace(/\s+/g, '');
+  const found = SUBJECTS.map((g) => ({ k: g[0], i: Math.min(...g.map((w) => { const p = t.indexOf(w); return p < 0 ? Infinity : p; })) }))
+    .filter((x) => Number.isFinite(x.i) && x.k !== '基金').sort((a, b) => a.i - b.i);
+  return found.map((x) => x.k);
+}
+
 /** 返回问题中最具体的主体组（只取最具体的一层，"黄金ETF联接基金"取联接基金/ETF，不取"基金"） */
 export function questionSubjects(question: string): string[][] {
   const q = normalizeText(question).replace(/\s+/g, '');
@@ -172,6 +183,8 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
   const raw = numbered.map((c) => normNum(`${c.docTitle}${c.heading}${c.text}`));
   // 按分句（逗号级）比较，避免一整句里别的分句的否定/量词干扰
   const srcSents = numbered.map((c) => splitSentences(c.text).flatMap((x) => x.split(/[，,；;：:]/)).filter((x) => x.length >= 4).map((x) => ({ x, b: charBigramSet(x) })));
+  // 带所在原句的分句（主体继承用）；"①ETF…②LOF…"按序号再切
+  const srcClauses = numbered.map((c) => splitSentences(c.text).flatMap((sent) => sent.split(/(?=[①②③④⑤⑥⑦⑧⑨⑩])/).flatMap((part) => part.split(/[，,；;：:]/).filter((x) => x.length >= 4).map((x) => ({ x, parent: part, b: charBigramSet(x) })))));
   const out: SentenceEvidence[] = [];
   for (const s of factualSentences(answer)) {
     const plain = s.replace(/\[\d+\]/g, '');
@@ -225,8 +238,28 @@ export function sentenceEvidence(answer: string, numbered: Chunk[], question = '
       if (flipPos) qualifierChange = `否定词与原文不一致（原文：不能/不得${flipPos}）`;
       else if (flipNeg) qualifierChange = `否定词与原文不一致（原文：可以${flipNeg}）`;
     }
-    const supported = (overlap >= SENT_SUPPORT || recite) && !missingNumbers.length && !missingTerms.length && !qualifierChange;
-    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, missingTerms, qualifierChange, recite, supported });
+    // 按分句核对主体：答案分句的主体（无则继承本句主体）与最相近依据分句的主体（无则继承其所在原句主体）不相交 → 不支持
+    let subjectMismatch: string | null = null;
+    const sentSubj = subjectsIn(plain);
+    for (const clause of plain.split(/[，,；;：:]/).filter((x) => x.replace(/[^\u3400-\u9fffA-Za-z0-9]/g, '').length >= 4)) {
+      const aSubj = subjectsIn(clause).length ? subjectsIn(clause) : sentSubj;
+      if (!aSubj.length) continue;
+      const cb = charBigramSet(clause);
+      let bestSrc: { x: string; parent: string } | null = null; let co = 0;
+      for (const n of support) for (const ss of srcClauses[n - 1]) {
+        let k = 0; for (const b of cb) if (ss.b.has(b)) k++;
+        const o = cb.size ? k / cb.size : 0; if (o > co) { co = o; bestSrc = ss; }
+      }
+      if (!bestSrc || co < 0.4) continue;
+      const sSubj = subjectsIn(bestSrc.x).length ? subjectsIn(bestSrc.x) : subjectsIn(bestSrc.parent).slice(0, 1);
+      if (sSubj.length && !aSubj.some((x) => sSubj.includes(x))) { subjectMismatch = `主体不一致（答案：${aSubj.join('/')}，原文：${sSubj.join('/')}）`; break; }
+    }
+    // 含数字的短句（"开盘时间为 9:30"）：数字全部能在依据块里找到时，重合率门槛放宽到 0.25
+    const nums = numericFacts(s);
+    const numericAnchored = nums.length > 0 && nums.every((x) => pool.includes(normNum(x)));
+    const threshold = numericAnchored ? SENT_SUPPORT_NUMERIC : SENT_SUPPORT;
+    const supported = (overlap >= threshold || recite) && !missingNumbers.length && !missingTerms.length && !qualifierChange && !subjectMismatch;
+    out.push({ text: s, cited, overlap: round(overlap), best, bestOverlap: round(bestOverlap), missingNumbers, missingTerms, qualifierChange, subjectMismatch, recite, supported });
   }
   return out;
 }

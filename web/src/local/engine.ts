@@ -303,6 +303,14 @@ export const localApi: ApiClient = {
     if (!m) { m = { docKey, title: input.title, category: input.category, productRisk: input.productRisk, tags: input.tags, createdAt: now() }; S().docs.push(m); }
     else Object.assign(m, { title: input.title, category: input.category, productRisk: input.productRisk, tags: input.tags });
     const prev = S().versions.filter((v) => v.docKey === docKey);
+    // 编辑中的草稿原地更新，不重复新建版本
+    const cur = input.versionId ? prev.find((x) => x.id === input.versionId && x.status === 'draft') : undefined;
+    if (cur) {
+      Object.assign(cur, { content: input.content, changeNote: input.changeNote, createdAt: now() });
+      if (input.gapId) { const g = S().gaps.find((x) => x.id === input.gapId); if (g) { g.draftVersionId = cur.id; g.docKey = docKey; if (g.status === 'open') g.status = 'drafting'; } }
+      save();
+      return cur;
+    }
     const v: DocVersion = { id: rid('dv'), docKey, version: Math.max(0, ...prev.map((x) => x.version)) + 1, content: input.content, changeNote: input.changeNote, author: '运营（演示）', status: 'draft', gapId: input.gapId ?? null, createdAt: now(), publishedAt: null };
     S().versions.push(v);
     if (input.gapId) { const g = S().gaps.find((x) => x.id === input.gapId); if (g) { g.draftVersionId = v.id; g.docKey = docKey; if (g.status === 'open') g.status = 'drafting'; } }

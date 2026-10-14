@@ -5,7 +5,7 @@ export class HttpError extends Error {
 export const CORS_HEADERS: Record<string, string> = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET,POST,OPTIONS',
-  'access-control-allow-headers': 'content-type,x-fault,x-admin-token',
+  'access-control-allow-headers': 'content-type,x-fault,x-admin-token,x-no-cache',
   'access-control-max-age': '86400',
 };
 export function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {

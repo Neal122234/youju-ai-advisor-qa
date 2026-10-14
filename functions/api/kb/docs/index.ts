@@ -22,12 +22,12 @@ function slug(s: string) {
   return a.length >= 3 ? a.slice(0, 48) : `doc-${Date.now().toString(36)}`;
 }
 
-type DocBody = { docKey?: unknown; title?: unknown; category?: unknown; productRisk?: unknown; tags?: unknown; content?: unknown; changeNote?: unknown; gapId?: unknown; author?: unknown; source?: unknown; effectiveDate?: unknown };
+type DocBody = { versionId?: unknown; docKey?: unknown; title?: unknown; category?: unknown; productRisk?: unknown; tags?: unknown; content?: unknown; changeNote?: unknown; gapId?: unknown; author?: unknown; source?: unknown; effectiveDate?: unknown };
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const b = await readJson<DocBody>(request);
   // 字段类型校验（拒绝对象/数组被 String() 强转成 "[object Object]"）
-  for (const k of ['docKey', 'title', 'category', 'content', 'changeNote', 'gapId', 'author', 'source', 'effectiveDate'] as const) {
+  for (const k of ['versionId', 'docKey', 'title', 'category', 'content', 'changeNote', 'gapId', 'author', 'source', 'effectiveDate'] as const) {
     if (b[k] !== undefined && b[k] !== null && typeof b[k] !== 'string') throw new HttpError(400, 'BAD_INPUT', `${k} 必须是字符串`);
   }
   if (b.productRisk !== undefined && b.productRisk !== null && typeof b.productRisk !== 'string') throw new HttpError(400, 'BAD_INPUT', 'productRisk 必须是 R1–R5 或 null');
@@ -60,6 +60,19 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     effective_date: String(pick(str(b.effectiveDate), fm.effective_date as string, pm.effective_date as string) ?? ts.slice(0, 10)) }) + body.replace(/^\n+/, '');
   let gapId = str(b.gapId) ?? null;
   if (!gapId) gapId = (await first<{ gap_id: string }>(env.DB, `SELECT gap_id FROM doc_versions WHERE doc_key = ? AND status = 'draft' AND gap_id IS NOT NULL ORDER BY version DESC LIMIT 1`, docKey))?.gap_id ?? null;
+  // 原地更新草稿：versionId 指向同一文档的 draft → UPDATE，返回同一版本；指向非 draft 或其他文档 → 400
+  const vid = str(b.versionId);
+  if (vid) {
+    const cur = await first<{ id: string; doc_key: string; status: string }>(env.DB, 'SELECT id, doc_key, status FROM doc_versions WHERE id = ?', vid);
+    if (!cur) throw new HttpError(404, 'NOT_FOUND', `版本不存在：${vid}`);
+    if (cur.doc_key !== docKey) throw new HttpError(400, 'BAD_INPUT', `versionId 属于 ${cur.doc_key}，与 docKey ${docKey} 不一致`);
+    if (cur.status !== 'draft') throw new HttpError(400, 'NOT_DRAFT', `版本 ${vid} 状态为 ${cur.status}，只能原地更新草稿；修改已发布内容请新建草稿`);
+    await run(env.DB, `UPDATE doc_versions SET content = ?, change_note = ?, author = ?, gap_id = COALESCE(?, gap_id), created_at = ? WHERE id = ? AND status = 'draft'`,
+      full, (str(b.changeNote) ?? '').slice(0, 300), (str(b.author) ?? '运营').slice(0, 40), gapId, ts, vid);
+    if (gapId) await run(env.DB, `UPDATE gaps SET status = CASE WHEN status = 'open' THEN 'drafting' ELSE status END, doc_key = ? WHERE id = ?`, docKey, gapId);
+    const row0 = await first(env.DB, 'SELECT * FROM doc_versions WHERE id = ?', vid);
+    return json({ ...camel(row0), version: camel(row0), updated: true });
+  }
   const version = await nextVersion(env.DB, docKey);
   const id = `dv_${uid().slice(0, 8)}`;
   await run(env.DB, `INSERT INTO doc_versions (id, doc_key, version, content, change_note, author, status, gap_id, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,

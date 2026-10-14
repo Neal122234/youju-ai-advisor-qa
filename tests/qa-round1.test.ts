@@ -221,3 +221,59 @@ describe('QA 第 2 轮', () => {
     expect(r.checks.find((c) => c.name === 'subject_check')?.pass).toBe(false);
   });
 });
+
+describe('M01 稳定性 / X27 检索改写', () => {
+  it('用户情况推断句（复述问题里的金额、"但账户有80万元"）被剔除但不计入过半，仍为 partial_refusal', async () => {
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"education","scope":"whole","reason":"x"}'
+      : '{"answer":"个人投资者开通科创板权限需满足申请前 20 个交易日日均资产不低于 50 万元[1]。但账户有80万元，符合资产要求。建议满足24个月交易经验后申请开通。","used":[1],"covered":true}');
+    const r = await runPipeline(req('开户半年，账户有80万，科创板开通权限需要什么条件？顺便说说宁德时代明天会涨吗', 'C4'), makeAdapters({ llm }));
+    expect(r.decision).toBe('partial_refusal');
+    expect(r.answer).not.toContain('符合资产要求');
+  });
+  it('expandQuery：我的风险等级 → 追加风险承受能力测评', async () => {
+    const { expandQuery } = await import('../core/pipeline');
+    expect(expandQuery('我的风险等级是怎么评定的？')).toContain('风险承受能力测评');
+    expect(expandQuery('ETF是什么')).toBe('ETF是什么');
+  });
+});
+
+describe('QA 第 3 轮', () => {
+  it('R3-1 句子主体 ETF、依据原句讲 LOF → 不支持', () => {
+    const c = chunkDocument('---\ndoc_key: etf\ntitle: ETF与LOF\n---\n## 区别\nLOF（上市型开放式基金）既可以在场外通过基金公司按净值申购赎回，也可以在交易所场内按市价买卖。\n\n## 对比\n①ETF 绝大多数是被动跟踪指数，LOF 可以主动管理；②ETF 一级市场申赎通常需要较大份额，主要面向机构，LOF 场外申购门槛低。\n');
+    const [bad] = sentenceEvidence('ETF 申购赎回通常在场外通过基金公司按净值进行[1]。', c);
+    expect(bad.supported).toBe(false);
+    expect(bad.subjectMismatch).toContain('lof');
+    const [ok] = sentenceEvidence('ETF 一级市场申赎通常需要较大份额，主要面向机构[2]。', c);
+    expect(ok.supported).toBe(true);
+  });
+  it('R3-2 userRisk 不进入生成 prompt', async () => {
+    const calls: string[][] = [];
+    await runPipeline(req('科创板开通权限需要什么条件', 'C5'), makeAdapters({ llm: echoLlm(calls) }));
+    expect(calls[0].join('')).not.toMatch(/C5|风险承受能力】/);
+  });
+  it('R3-3 ETF 交易时间检索追加 A股主时段', async () => {
+    const { expandQuery } = await import('../core/pipeline');
+    expect(expandQuery('ETF的交易时间是几点到几点？')).toContain('连续竞价');
+  });
+  it('R3-9 降级摘录挑与问题相关的句子；毫不相关时转人工', async () => {
+    const { extractiveSelect } = await import('../core/pipeline');
+    const c = chunkDocument('---\ndoc_key: th\ntitle: 交易时间\n---\n## 时段\n交易日为周一至周五。9:30–11:30、13:00–14:57 为连续竞价，9:15–9:25 为开盘集合竞价。\n\n## K线\n阳线表示收盘价高于开盘价。\n');
+    const hits = c.map((chunk, i) => ({ chunk, score: 0.8 - i * 0.1 }));
+    const ex = extractiveSelect(hits, 'A股每天几点开盘');
+    expect(ex.text).toContain('9:15');
+    expect(ex.text).not.toContain('阳线');
+    expect(extractiveSelect(hits, '比特币怎么挖矿').relevance).toBeLessThan(0.25);
+    const r = await runPipeline(req('美股期权保证金怎么算'), makeAdapters({ retrieve: async () => ({ hits, mode: 'hybrid' as const }) }, c));
+    expect(r.decision).toBe('handoff_unknown');
+  });
+});
+describe('R3-10 引用分以最终正文为准', () => {
+  it('模型没写角标、系统补引用后 citation 分 > 0，check 写最终引用数', async () => {
+    const llm = async (m: any) => (m[0].content.includes('意图分类器') ? '{"category":"education","scope":"whole","reason":"x"}'
+      : '{"answer":"个人投资者开通科创板权限需满足申请前 20 个交易日日均资产不低于 50 万元。","used":[1],"covered":true}');
+    const r = await runPipeline(req('科创板开通条件', 'C4'), makeAdapters({ llm }));
+    expect(r.answer).toMatch(/\[\d\]/);
+    expect(r.confidenceBreakdown.citation).toBeGreaterThan(0);
+    expect(r.checks.find((c) => c.name === 'citation')!.detail).toContain('最终正文引用');
+  });
+});

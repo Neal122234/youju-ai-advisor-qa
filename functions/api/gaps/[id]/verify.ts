@@ -12,8 +12,8 @@ export const onRequestPost: PagesFunction<Env> = async ({ params, env }) => {
   const qs = [...new Set([gap.sample_question, ...safeArr(gap.questions_json)])].slice(0, 10);
   const results = [];
   for (const q of qs) {
-    const r = await answer(env, { question: q, userRisk: 'C3', sessionId: `verify:${id}` }, new Set(), { kb, persist: true, sessionTag: `verify:${id}`, useCache: false });
-    results.push({ question: q, decision: r.decision, confidence: r.confidence, qaId: r.id, citations: r.citations.map((c) => c.docKey) });
+    const r = await answer(env, { question: q, userRisk: 'C3', sessionId: `verify:${id}` }, new Set(), { kb, persist: false, useCache: false }); // 回归验证不写日志、不建工单、不给缺口计数
+    results.push({ question: q, decision: r.decision, confidence: r.confidence, qaId: null, citations: r.citations.map((c) => c.docKey) });
   }
   const resolved = results.every((r) => !r.decision.startsWith('handoff'));
   if (resolved) await run(env.DB, `UPDATE gaps SET status = 'resolved', resolved_release = ? WHERE id = ?`, kb.release, id);

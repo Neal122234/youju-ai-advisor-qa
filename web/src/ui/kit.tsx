@@ -257,7 +257,10 @@ export const confirmDialog = (o: ConfirmOpts) => (confirmFn ? confirmFn(o) : Pro
 function ConfirmHost() {
   const [cur, setCur] = useState<(ConfirmOpts & { resolve: (v: boolean) => void }) | null>(null);
   useEffect(() => {
-    confirmFn = (o) => new Promise<boolean>((resolve) => setCur({ ...o, resolve }));
+    confirmFn = (o) => {
+      const trigger = document.activeElement as HTMLElement | null;
+      return new Promise<boolean>((resolve) => setCur({ ...o, resolve: (v) => { resolve(v); setTimeout(() => { if (trigger && document.contains(trigger) && document.activeElement === document.body) trigger.focus(); }, 0); } }));
+    };
     return () => { confirmFn = null; };
   }, []);
   if (!cur) return null;
@@ -268,7 +271,8 @@ function ConfirmHost() {
       tone={cur.danger ? 'danger' : undefined}
       onClose={() => done(false)}
       footer={<>
-        <button className="btn" onClick={() => done(false)}>{cur.cancelText ?? '取消'}</button>
+        {/* 危险操作默认聚焦「取消」，误按 Enter 不会执行 */}
+        <button className="btn" onClick={() => done(false)} data-autofocus={cur.danger ? '' : undefined}>{cur.cancelText ?? '取消'}</button>
         <button className={`btn ${cur.danger ? 'danger' : 'primary'}`} onClick={() => done(true)}>{cur.confirmText ?? '确认'}</button>
       </>}
     >

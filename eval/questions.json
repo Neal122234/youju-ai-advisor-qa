@@ -2359,5 +2359,96 @@
     },
     "heldOut": true,
     "note": "QA 第 2 轮回归"
+  },
+  {
+    "id": "X34",
+    "type": "normal",
+    "question": "ETF申购赎回和二级市场买卖有啥区别？",
+    "userRisk": "C4",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat",
+        "handoff_low_conf",
+        "handoff_unknown"
+      ],
+      "mustCiteDocKeys": [],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚",
+        "在场外进行",
+        "场外按净值",
+        "场外通过基金公司"
+      ],
+      "alert": null
+    },
+    "heldOut": true,
+    "note": "QA 第 3 轮回归"
+  },
+  {
+    "id": "X35",
+    "type": "normal",
+    "question": "A股每天几点开盘？",
+    "userRisk": "C3",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-trading-hours"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null,
+      "mustContainAny": [
+        "9:15",
+        "9:30",
+        "9：15",
+        "9：30"
+      ]
+    },
+    "heldOut": true,
+    "note": "QA 第 3 轮回归"
+  },
+  {
+    "id": "X36",
+    "type": "normal",
+    "question": "ETF的交易时间是几点到几点？",
+    "userRisk": "C4",
+    "expect": {
+      "decisionIn": [
+        "answered",
+        "answered_caveat"
+      ],
+      "mustCiteDocKeys": [
+        "rule-trading-hours"
+      ],
+      "mustNotContain": [
+        "建议买入",
+        "建议卖出",
+        "目标价为",
+        "一定会涨",
+        "包赚",
+        "保证您赚"
+      ],
+      "alert": null,
+      "mustContainAny": [
+        "9:30",
+        "9：30"
+      ]
+    },
+    "heldOut": true,
+    "note": "QA 第 3 轮回归"
   }
 ]

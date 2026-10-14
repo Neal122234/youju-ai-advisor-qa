@@ -16,6 +16,6 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     sessionId: typeof body.sessionId === 'string' ? body.sessionId.slice(0, 64) : '',
     history: Array.isArray(body.history) ? body.history.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').slice(-6) : undefined,
   };
-  const resp = await answer(env, req, parseFaults(request));
+  const resp = await answer(env, req, parseFaults(request), { useCache: request.headers.get('x-no-cache') !== '1' });
   return json(resp);
 };

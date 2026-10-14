@@ -249,3 +249,18 @@ describe('QA 第 2 轮：下线与回滚', () => {
     expect(rb.body.rolledBackTo).toBe(1);
   });
 });
+
+describe('草稿原地更新（versionId）', () => {
+  it('versionId 指向 draft → 更新同一版本；指向已发布 → 400', async () => {
+    const a = await call(docs.onRequestPost, 'POST', '/api/kb/docs', { docKey: 'qa-inplace', title: '原地更新', category: 'investor_edu', content: '## 段\n第一版内容。', changeNote: 'v1' });
+    const b = await call(docs.onRequestPost, 'POST', '/api/kb/docs', { versionId: a.body.id, docKey: 'qa-inplace', title: '原地更新', category: 'investor_edu', content: '## 段\n第二次保存的内容。', changeNote: 'v1-改' });
+    expect(b.body.id).toBe(a.body.id);
+    expect(b.body.updated).toBe(true);
+    expect(b.body.content).toContain('第二次保存');
+    const d = await call(doc.onRequestGet, 'GET', '/api/kb/docs/qa-inplace', undefined, {}, { docKey: 'qa-inplace' });
+    expect(d.body.versions.length).toBe(1);
+    await call(publish.onRequestPost, 'POST', '/api/kb/publish', { versionIds: [a.body.id] });
+    await expect(call(docs.onRequestPost, 'POST', '/api/kb/docs', { versionId: a.body.id, docKey: 'qa-inplace', title: '原地更新', category: 'investor_edu', content: '## 段\n改已发布。' })).rejects.toMatchObject({ status: 400 });
+    await expect(call(docs.onRequestPost, 'POST', '/api/kb/docs', { versionId: a.body.id, docKey: 'rule-fees', title: 'x', category: 'investor_edu', content: '## 段\nx。' })).rejects.toMatchObject({ status: 400 });
+  });
+});

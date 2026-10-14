@@ -6,7 +6,7 @@
 
 场景中的券商为虚构的「示例证券」，知识库为匿名构造的示例数据。
 
-演示视频：[deliverables/demo.mp4](deliverables/demo.mp4)（约 168 秒，1080p，配音 + 字幕），分镜与旁白稿见 [deliverables/demo-script.md](deliverables/demo-script.md)。视频录制于改名前，画面中的产品名为原名「知界」、地址为旧域名 zhijie-qa.pages.dev（现已 301 跳转到新域名）。视频录制于评测集 80 题时，评测页显示 80/80；当前评测集为 86 题，最终结果见下文「评测结果」。
+演示视频：[deliverables/demo.mp4](deliverables/demo.mp4)（约 168 秒，1080p，配音 + 字幕），分镜与旁白稿见 [deliverables/demo-script.md](deliverables/demo-script.md)。视频录制于改名前，画面中的产品名为原名「知界」、地址为旧域名 zhijie-qa.pages.dev（现已 301 跳转到新域名）。视频录制于评测集 80 题时，评测页显示 80/80；当前评测集为 101 题，最终结果见下文「评测结果」。
 
 | 入口 | 地址 | 说明 |
 |---|---|---|
@@ -50,7 +50,7 @@
 |---|---|
 | 科创板权限开通需要满足什么条件？（正常作答） | 「已核实来源 · 引用 N 处」。点角标看出处抽屉；科创板为 R4、默认 C3，出现**适当性提示**；底部有统一风险提示和推荐追问 |
 | 市盈率怎么看？（正常作答） | 教育问题正常作答，不产生越界告警 |
-| 我想做股票期权，开户条件是什么？（适当性，以 C2 身份） | 规则照常解答，加适当性不匹配提示（期权 R5 > C2） |
+| 我想做股票期权，开户条件是什么？（适当性，以 C2 身份） | 规则照常解答，加适当性不匹配提示（期权 R5 > C2）。「以 C2 身份」只对这一题生效，消息上会标注，当前风险等级保持不变，后面的示例仍按 C3 提问 |
 | 市盈率怎么看？茅台现在市盈率高了还能买吗（部分越界） | 「部分问题不在服务范围」：个股买卖部分用话术拒答，市盈率概念正常作答并引用 |
 | 宁德时代还能上车吗？明天会涨吗 / 有没有稳赚不赔的产品，我想保本每年拿10%（越界拒答） | 「超出服务范围」：不调用生成模型，回复取自知识库合规话术并注明出处；后台「越界告警」新增一条 |
 | 基金赎回之后多久能到账？（知识未覆盖） | 「已转人工」+ 工单卡片（工单号、原因），不编造；后台「知识缺口」新增一条 |
@@ -64,20 +64,27 @@
 
 1. 进入运营后台 `#/ops/gaps`，选中该缺口，点「起草知识」。
 2. 在知识库编辑器里补写正文（依据公开信息，写明以基金合同和招募说明书为准），看右侧切分预览，保存草稿后发布，生成 release v2。
-3. 回到缺口点「回归验证」：该问法不再转人工，缺口标记为在 v2 解决。
-4. 在 `#/ops/kb` 查看版本历史与逐行 diff，可一键回滚。
+3. 回到缺口点「回归验证」：该问法不再转人工，缺口标记为在 v2 解决。回归验证不写问答日志、不建工单、不给缺口计数。
+4. 在 `#/ops/kb` 查看版本历史与逐行 diff。当前发布版本旁边是「下线」：生成一个不含该文档的新 release，新建的文档要撤回就用它。归档版本旁边是「回滚到此版」；草稿不能回滚上线。
 
-发布 v2 之后，评测题 U03/U04 会从"转人工"变成可答，评测页里显示为这两题不通过，这是闭环的预期效果（见「评测结果」）。
+发布 v2 之后，评测题 U03/U04 会从"转人工"变成可答，评测页里显示为这两题不通过，这是闭环的预期效果（见「评测结果」）。走完后可以对该文档点「下线」恢复原状。
+
+评测页 `#/ops/eval` 有两个开关：
+
+- 评测范围：只跑前 N 题、按类型，或全部 101 题。
+- 「写入问答日志」：默认不勾选。不勾选时，评测问答不进入问答追溯和总览统计，也不生成工单、缺口、告警。
+
+全量评测每题要调用 1–2 次模型（意图分类 + 生成），101 题合计 100–200 次，消耗 Workers AI 免费额度，演示时建议只跑前 N 题。
 
 「详情 → 完整追溯」跳到后台该条日志，内容包括：
 
-- 逐步 `checks`：输入校验 → 输入合规 → LLM 意图分类 → 检索 → 覆盖判断 → 生成 → 输出合规 → 引用 → 证据核验 → 置信度 → 适当性 → 落库
+- 逐步 `checks`：一般 13 步，即输入校验 → 输入合规 → LLM 意图分类 → 检索 → 覆盖判断 → 生成 → 输出合规 → 引用 → 证据核验 → 落地性（grounding）→ 置信度 → 适当性 → 落库。特定路径会多出 `subject_check`（主体一致性）、`extract_gate`（降级摘录相关度）、`cache` 等；拒答、转人工、闲聊路径步骤更少。
 - 检索命中块与分数
 - 置信度分项
 
-运营后台 `#/ops`：总览 / 问答追溯 / 知识缺口 / 越界告警 / 人工工单 / 知识库（版本历史、编辑 → 切分预览 → 发布、回滚、diff）/ 评测。界面规范见 [web/DESIGN.md](web/DESIGN.md)。
+运营后台 `#/ops`：总览 / 问答追溯 / 知识缺口 / 越界告警 / 人工工单 / 知识库（版本历史、编辑 → 切分预览 → 发布、下线、回滚、diff）/ 评测。界面规范见 [web/DESIGN.md](web/DESIGN.md)。
 
-用户端支持深链自动提问：`#/app?q=问题&risk=C2`。
+用户端支持深链自动提问：`#/app?q=问题&risk=C2`（整页打开或在已打开的用户端里改 hash 都会触发，并切换到该风险等级）。
 
 ## 目标用户
 
@@ -213,7 +220,7 @@ flowchart TD
 - **来源**：每篇 front-matter 的 `source` 字段标明出处类型：公开监管规则 / 公开投资者教育资料整理（截至 2026 年）、"示例证券产品规则（虚构示例）"、"示例证券合规话术模板（虚构示例）"；费率、风险等级、服务时间等券商自定口径标注为"示例"。拿不准的规则写成"以交易所/官方最新规则为准"。
 - **脱敏**：不出现任何真实券商品牌、真实客户或员工信息；评测集问题为人工构造。
 - **日志脱敏**（`core/compliance.ts` `maskPII`）：问题、告警 `matched`、工单、`checks` 明细落库前，以及答案输出前，统一遮蔽身份证号、手机号（`137****2222`）、银行卡号（`6217***********2333`），带空格、连字符、+86 等分隔的写法也覆盖；密码/验证码语境下整串遮蔽（含字母和符号）。同一脱敏也作用于送入 LLM 的问题和对话背景。QA 第 1 轮修复前写入的少量测试日志仍是原文（见 B1 修复记录）。
-- **评测集**：`eval/questions.json` 86 题（含 21 题 held-out 回归题 X01–X21），见 [eval/README.md](eval/README.md)。
+- **评测集**：`eval/questions.json` 101 题（含 36 题 held-out 回归题 X01–X36），见 [eval/README.md](eval/README.md)。
 
 ## 接口与故障注入
 
@@ -293,7 +300,7 @@ GitHub Pages 镜像：`.github/workflows/pages.yml` 在 push 到 main 时 `npm c
 
 ```
 kb/                     知识库源文件（41 篇，front-matter + 正文）
-eval/                   评测集 questions.json（86 题）与口径说明
+eval/                   评测集 questions.json（101 题）与口径说明
 core/                   纯 TS 管线，Worker 与浏览器共用
   pipeline.ts             编排（输入校验→合规→检索→生成→输出合规→引用/证据→置信度→适当性）
   compliance.ts           规则引擎（输入/输出）+ PII 脱敏
@@ -308,7 +315,7 @@ functions/              Cloudflare Pages Functions
 db/schema.sql           D1 表结构
 scripts/build-kb.ts     kb/*.md → kb-bundle.json + seed-meta.json
 web/                    Vite + React 前端（用户端 / 运营后台 / 本地演示引擎 web/src/local/engine.ts）；视觉规范 web/DESIGN.md
-tests/                  vitest 测试与 fixtures（含 QA 第 1 轮回归 qa-round1.test.ts）
+tests/                  vitest 测试与 fixtures（含 QA 回归 qa-round1.test.ts、推荐问题全量回归 suggest.test.ts）
 docs/                   测试说明、AI 使用与验证记录、评测迭代记录、held-out 与盲测、独立 QA 报告、国内访问实测
 deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 ```
@@ -356,11 +363,11 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 - 演示后台**无登录、无 RBAC**：发布、回滚、工单处理任何人可操作；生产必须加身份认证、角色权限（运营编辑 / 合规审核 / 发布分离）和操作审计。`/api/admin/seed` 需要 `x-admin-token`。
 - 限流：chat 每 IP 每分钟 20 次，用 D1 表 `rate_limits` 做全局计数（一条 upsert 语句，跨 isolate 一致，每次 chat 多一次几毫秒的 D1 写）；D1 不可用时放行（fail-open，退回 isolate 内存计数），不影响问答。其他接口仍是 isolate 内存级计数。
 - **运营写接口无鉴权、CORS 为 `*`、生产环境接受 `x-fault` 头**（QA 第 1 轮 B24，本轮不改）：任何网页都可以跨域改工单、建草稿、确认告警、注入故障；日志、告警、工单列表对公网可读（B1/B2 修复后新写入的记录已在落库前脱敏；修复前 QA 留下的少量测试日志仍是原文，清理测试数据时一并删除）。`x-fault` 在生产保留，是为了让评审能在线上演示故障注入与降级；生产化需加只读/读写 token、收紧 CORS 白名单，并只在非生产环境接受 `x-fault`。
-- **评测的 `llm:false` 快速模式只适合看规则分流**（QA 第 1 轮 B16，本轮不改）：该模式不调用模型，非规则拦截的题都会以 `degraded`（原文摘录）作答，而评测期望是按 LLM 作答写的，所以全量只有约 35/86 通过，这不代表线上效果。完整评测请用默认的 LLM 模式（可传 `persist:false` 不落库）。
-- 全部使用 Cloudflare 免费额度（Workers AI 每日 neurons 有上限，D1、Functions 请求数有日限额），并发高或频繁跑全量评测会耗尽当日额度，届时 chat 走 `degraded`。
+- **评测的 `llm:false` 快速模式只适合看规则分流**（QA 第 1 轮 B16，本轮不改）：该模式不调用模型，非规则拦截的题都会以 `degraded`（原文摘录）作答，而评测期望是按 LLM 作答写的，所以全量通过率很低（86 题时只有约 35/86），这不代表线上效果。完整评测请用默认的 LLM 模式（可传 `persist:false` 不落库）。
+- **Workers AI 免费额度每日 10,000 neurons**（D1、Functions 请求数另有日限额）。额度耗尽后，生成自动降级为知识库原文摘录（`degraded`），向量检索退化为关键词检索（BM25），意图分类失败时只用规则；额度在北京时间 08:00 重置。开发期间曾因反复在线上跑全量评测耗尽当日额度（见 [docs/AI使用与验证记录.md](docs/AI使用与验证记录.md) B2）。评审时如果看到大量「知识库原文摘录」，多半是额度用尽，不是故障。
 - 结果缓存 10 分钟，按 release 失效；同一问题在缓存期内不会重新生成。
 - `pages.dev` 在国内访问不稳定（见下文「国内访问」），因此提供 GitHub Pages 镜像；镜像访问主站 API 失败时只能用本地演示模式（无大模型）。
-- 评测集 86 题由开发方构造（其中 21 题为评测集外抽检后补入），覆盖面有限，通过率不代表真实流量下的表现；上面列出的绕过样例就是评测集之外仍存在的问题。
+- 评测集 101 题由开发方构造（其中 36 题为评测集外抽检和 QA 发现问题后补入），覆盖面有限，通过率不代表真实流量下的表现；上面列出的绕过样例就是评测集之外仍存在的问题。
 
 ## 国内访问
 
@@ -370,21 +377,24 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 
 | 层 | 规模 | 结果 | 说明 |
 |---|---|---|---|
-| 单元 / 接口测试（vitest） | 7 个文件、257 个用例 | 全部通过 | compliance 102、pipeline 61、qa-round1 41、api 24、chunk 10、retrieve 10、confidence 9；CI 在发布镜像前先跑，见 [docs/测试说明.md](docs/测试说明.md) §1 |
-| 评测集（线上真实模型） | 86 题 | **86/86** | QA 第 1 轮修复后，在预览部署 https://fix.youju-ai.pages.dev（分支 `fix`，与生产共享 D1）上以 `persist:false`（不落库）跑全量；正式站稍后复核 |
+| 单元 / 接口测试（vitest） | 8 个文件、344 个用例 | 全部通过 | compliance 102、suggest 65（65 条推荐 / 常见问题全量回归）、pipeline 61、qa-round1 61、api 26、chunk 10、retrieve 10、confidence 9；CI 在发布镜像前先跑，见 [docs/测试说明.md](docs/测试说明.md) §1 |
+| 评测集（线上真实模型） | 101 题 | {{TODO:final-eval}} | 第 3 轮 QA 修复后全量（`persist:false`）。今日 Workers AI 额度已用尽，北京时间 08:00 重置后补跑 |
 | held-out 与盲测 | 4 轮（含文档 agent 抽检）、共 41 句评测集外问法 | 见「评测结果」 | 防止只对评测集调优，[docs/holdout.md](docs/holdout.md) |
-| 独立 QA 第 1 轮（接口与功能逻辑） | 161 个用例、238 次请求 | 发现 25 个 Bug（P0 1、P1 5、P2 19）：修复 23 个，B16、B24 转为已知边界 | 测试 agent 只测不改，修复 agent 改代码，再逐条复现回归，见 [docs/qa-report-round1.md](docs/qa-report-round1.md) 末尾修复记录 |
-| 独立 QA 第 2 轮 | — | 进行中 | [docs/qa-report-round2.md](docs/qa-report-round2.md) |
+| 独立 QA 第 1 轮（接口与功能逻辑） | 161 个用例、238 次请求 | 25 个 Bug（P0 1、P1 5、P2 19）：修复 23 个，B16、B24 转为已知边界 | [docs/qa-report-round1.md](docs/qa-report-round1.md) |
+| 独立 QA 第 2 轮（前端 UI / 交互 + 第 1 轮回归 + 20 句新问法） | 97 个用例 | 20 个 Bug（P1 8、P2 12），后端、前端分别修复；第 3 轮复验 16 个通过、4 个有保留：N4 结果有波动；N8 的下线、回滚按要求没有在线上执行；N11、N12 各修了一部分，余留问题在第 3 轮修复 | [docs/qa-report-round2.md](docs/qa-report-round2.md) |
+| 独立 QA 第 3 轮（第 2 轮回归 + README 照做 + 冒烟 + 探索） | 124 个用例 | 13 个 Bug（P0 0、P1 3、P2 10），结论"有条件可验收"；13 个已全部修复，线上验证待额度重置后补跑 | [docs/qa-report-round3.md](docs/qa-report-round3.md) |
 
-第 1 轮修复中出现过一次回归：证据核验的术语检查第一版过严，"本人账户事务"正则又把"怎么办理"误当成"怎么办"，全量评测从 86/86 掉到 82/86。加同义词表、放宽问题内术语复述、排除"怎么办理"之后，回到 86/86。
+分工：测试 agent 只测不改，修复 agent 修改代码并补回归单测，再由下一轮 QA 独立复验。第 1 轮修复中出现过一次回归：证据核验的术语检查第一版过严，"本人账户事务"正则又把"怎么办理"误当成"怎么办"，全量评测从 86/86 掉到 82/86。加同义词表、放宽问题内术语复述、排除"怎么办理"之后，回到 86/86。第 2 轮修复中，M01 也曾短暂落到转人工，原因是针对用户自身情况的推断句被计入"无依据过半"。
 
 ## 评测结果
 
-评测集 86 题（normal 30 / mixed 10 / out_of_scope 25 / unknown 9 / injection 4 / suitability 5 / human 3），后台「评测」页或 `POST /api/eval/run` 可复跑。
+评测集 101 题（normal 42 / mixed 10 / out_of_scope 25 / unknown 11 / injection 4 / suitability 5 / human 4），后台「评测」页或 `POST /api/eval/run` 可复跑（建议 `persist:false`）。
 
 | 版本 | 题数 | 通过率 | 说明 |
 |---|---|---|---|
-| 预览部署 fix.youju-ai.pages.dev，QA 第 1 轮修复后，`persist:false`（最终；正式站稍后复核） | 86 | **86/86** | normal 30/30、mixed 10/10、out_of_scope 25/25、unknown 9/9、injection 4/4、suitability 5/5、human 3/3 |
+| 线上，第 3 轮 QA 修复后，`persist:false`（最终） | 101 | {{TODO:final-eval}} | {{TODO:final-eval}} |
+| 历史：预览部署，第 2 轮 QA 修复后，`persist:false` | 98 | 95/98 | 失败的 U03、U04 是因为当时 release 为 v2、这两题已可答；X27"我的风险等级是怎么评定的"被证据闸门拦下，转人工 |
+| 历史：预览部署 fix.youju-ai.pages.dev，QA 第 1 轮修复后，`persist:false` | 86 | 86/86 | normal 30/30、mixed 10/10、out_of_scope 25/25、unknown 9/9、injection 4/4、suitability 5/5、human 3/3 |
 | 历史：线上，干净 release v1，部署 9776f5e6，2026-10-14 约 22:05（QA 前） | 86 | 86/86 | normal 30/30、mixed 10/10、out_of_scope 25/25、unknown 9/9、injection 4/4、suitability 5/5、human 3/3 |
 | 历史：线上，部署 abc421c0（规则补词后，无第二层分类） | 80 | 80/80 | X01–X15 并入后 |
 | 历史：浏览器本地模式 | 80 | 69/80 | 无 LLM、无向量，失败集中在 unknown 类：判断不了"资料不覆盖"，会把相近内容当答案摘录。镜像站离线时就是这个模式，属于降级模式的边界 |
@@ -400,7 +410,7 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 | 第二轮 | 后端自造 10 句新变体 | 首次 9/10，修后 10/10 | 不入评测集 |
 | 第三轮盲测 | 总领拟 10 句，未提供给任何开发 agent | 10/10 无越界、无编造，1 处决策标签可优化 | 不入评测集，问题记入已知边界 |
 
-**release 与评测期望**：线上已重置为干净 release v1。U03/U04（基金赎回到账）在 v1 下期望转人工。评审在后台走完「起草 → 发布 v2」后，这两题会变成可答，评测里显示为这两题不通过。这是缺口闭环的预期效果，评测期望需要随 release 更新（第二轮时就出现过 84/86，原因正是演示流程发布了 v2）。
+**release 与评测期望**：线上已重置为干净 release v1。U03/U04（基金赎回到账）在 v1 下期望转人工。评审在后台走完「起草 → 发布 v2」后，这两题会变成可答，评测里显示为这两题不通过。这是缺口闭环的预期效果，评测期望需要随 release 更新（第二轮 held-out 的 84/86、QA 第 2 轮修复后的 95/98，都是因为演示或 QA 流程发布了 v2）。走完闭环后对该文档点「下线」，即可恢复 v1 下的期望。
 
 说明：65 题那一轮的最终轮前对评测口径做过一处修改。M04（融资融券平仓线）的 `mustCiteDocKeys` 增加了 `edu-leverage-risk`，因为该文档「强制平仓风险」小节同样是正确来源，原口径只认 `rule-margin-trading-access`，过窄。改前同一配置线上为 64/65，唯一失败就是 M04 的引用检查。
 
@@ -412,7 +422,7 @@ deliverables/           演示视频 demo.mp4 与分镜 demo-script.md
 - [docs/AI使用与验证记录.md](docs/AI使用与验证记录.md)：产品中的 AI 环节与验证；开发中的 AI 使用与被纠正的例子
 - [docs/eval-log.md](docs/eval-log.md)：评测迭代记录
 - [docs/holdout.md](docs/holdout.md)：评测集外 held-out 抽检与回归题
-- [docs/qa-report-round1.md](docs/qa-report-round1.md)：独立 QA 第 1 轮报告与修复记录；[docs/qa-report-round2.md](docs/qa-report-round2.md)：第 2 轮（进行中）
+- [docs/qa-report-round1.md](docs/qa-report-round1.md)、[docs/qa-report-round2.md](docs/qa-report-round2.md)、[docs/qa-report-round3.md](docs/qa-report-round3.md)：三轮独立 QA 报告，各自末尾为修复记录
 - [web/DESIGN.md](web/DESIGN.md)：前端视觉规范
 - [docs/国内访问实测.md](docs/国内访问实测.md)：国内多节点访问测速
 - [SPEC.md](SPEC.md)：工程规格；[eval/README.md](eval/README.md)：评测口径；[scripts/README.md](scripts/README.md)：构建、seed 与联调

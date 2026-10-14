@@ -301,12 +301,18 @@ function Editor({ query }: { query: URLSearchParams }) {
   const [pvErr, setPvErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<DocVersion | null>(null);
   const [created, setCreated] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState<null | 'doc' | 'gap'>(null);
   const [busy, setBusy] = useState(false);
   const [pub, setPub] = useState(false);
   const [published, setPublished] = useState<string | null>(null);
   const [gapQs, setGapQs] = useState<string[]>([]);
   useEffect(() => {
-    if (gapId) api.gaps().then((gs) => setGapQs(gs.find((g) => g.id === gapId)?.questions ?? [])).catch(() => {});
+    if (gapId) api.gaps().then((gs) => {
+      const g = gs.find((x) => x.id === gapId);
+      setGapQs(g?.questions ?? []);
+      if (!g && !prefill) setNotFound((n) => n ?? 'gap');
+    }).catch(() => {});
   }, [gapId]);
 
   useEffect(() => {
@@ -329,6 +335,7 @@ function Editor({ query }: { query: URLSearchParams }) {
     api.doc(docKeyQ).then((d) => {
       setDetail(d);
       const v = d.versions.find((x) => x.id === versionQ) ?? d.versions.find((x) => x.status === 'draft') ?? d.versions.find((x) => x.status === 'published') ?? d.versions[0];
+      setDraftId(v?.status === 'draft' ? v.id : null);
       // 标题等元数据只以表单为准：版本正文里的 front-matter 拆出来填进表单，正文框只留 Markdown 正文；保存时后端按表单重建 front-matter
       const { meta, body } = parseFrontMatter(v?.content ?? '');
       const fmStr = (k: string) => (typeof meta[k] === 'string' && meta[k] ? String(meta[k]) : '');
@@ -339,7 +346,10 @@ function Editor({ query }: { query: URLSearchParams }) {
         tags: (Array.isArray(meta.tags) && meta.tags.length ? (meta.tags as unknown[]).map(String) : d.doc.tags).join('，'),
         content: body.replace(/^\n+/, ''), changeNote: v?.status === 'draft' ? v.changeNote : gapId ? '补充知识缺口' : '',
       });
-    }).catch((e) => toast('载入文档失败：' + e.message, 'red')).finally(() => setLoading(false));
+    }).catch((e) => {
+      if (e?.status === 404 || e?.code === 'NOT_FOUND' || /不存在/.test(e?.message ?? '')) setNotFound('doc');
+      else toast('载入文档失败：' + e.message, 'red');
+    }).finally(() => setLoading(false));
   }, [docKeyQ, versionQ, gapId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -360,8 +370,9 @@ function Editor({ query }: { query: URLSearchParams }) {
       const v = await api.saveDoc({
         docKey: form.docKey || undefined, title: form.title.trim(), category: form.category, productRisk: form.productRisk || null,
         tags: form.tags.split(/[,，\s]+/).filter(Boolean), content: form.content, changeNote: form.changeNote || '编辑', gapId,
+        versionId: draftId,
       });
-      setSaved(v); setCreated(true);
+      setSaved(v); setCreated(true); setDraftId(v.id);
       if (!form.docKey) setForm((f) => ({ ...f, docKey: v.docKey }));
       toast(`已保存草稿 v${v.version}`, 'green');
       if (gapId) {
@@ -373,18 +384,30 @@ function Editor({ query }: { query: URLSearchParams }) {
     } catch (e: any) { toast('保存失败：' + e.message, 'red'); } finally { setBusy(false); }
   }
 
+  // 保存过一次后就是"编辑已有文档"（N12）
+  const editing = !isNew || created;
+  const crumbDoc = docKeyQ || (created ? form.docKey : '');
   const back = <Crumbs items={[
     gapId ? { label: '知识缺口', href: `#/ops/gaps?id=${encodeURIComponent(gapId)}` } : { label: '知识库', href: lastListHref('kb', '#/ops/kb') },
-    ...(docKeyQ ? [{ label: form.title || detail?.doc.title || docKeyQ, href: `#/ops/kb/doc/${encodeURIComponent(docKeyQ)}` }] : []),
-    { label: isNew ? '新建文档' : '编辑' },
+    ...(crumbDoc ? [{ label: form.title || detail?.doc.title || crumbDoc, href: `#/ops/kb/doc/${encodeURIComponent(crumbDoc)}` }] : []),
+    { label: editing ? '编辑' : '新建文档' },
   ]} />;
   if (loading) return <div className="page">{back}<Loading rows={8} /></div>;
+  if (notFound) return (
+    <div className="page">
+      {back}
+      <Empty art="doc" title={notFound === 'doc' ? '文档不存在' : '缺口不存在'}>
+        {notFound === 'doc' ? <>没有找到 doc_key 为「{docKeyQ}」的文档，可能已被删除或链接有误。</> : <>没有找到这个知识缺口，可能链接有误。</>}
+        <br /><a href={notFound === 'doc' ? '#/ops/kb' : '#/ops/gaps'}>{notFound === 'doc' ? '返回知识库' : '返回知识缺口'}</a>{notFound === 'doc' && <> · <a href="#/ops/kb/new">新建文档</a></>}
+      </Empty>
+    </div>
+  );
   const flowStep = published ? 3 : saved ? 2 : 1;
 
   return (
     <div className="page editor-page">
       {back}
-      <PageHead title={isNew ? (form.title ? `新建：${form.title}` : '新建文档') : `编辑：${form.title || '未命名文档'}`} desc={gapId ? '由知识缺口发起：保存草稿 → 发布 → 回到缺口做回归验证' : '保存后产生草稿版本，发布后才会被检索到'} />
+      <PageHead title={editing ? `编辑：${form.title || '未命名文档'}` : form.title ? `新建：${form.title}` : '新建文档'} desc={gapId ? '由知识缺口发起：保存草稿 → 发布 → 回到缺口做回归验证' : '保存后产生草稿版本，发布后才会被检索到'} />
       {gapId && (
         <ol className="stepper inline">
           {['起草知识', '发布新版本', '回归验证'].map((t, i) => (

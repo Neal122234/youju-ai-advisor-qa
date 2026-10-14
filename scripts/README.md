@@ -64,3 +64,17 @@ npx wrangler pages dev dist --d1 DB -b MOCK_AI=1
 
 - 限流：isolate 内存 Map 固定窗口（chat 每 IP 每分钟 20 次，其他接口 120 次）。零 D1 写入、不受 `x-fault: db` 影响；代价是各 isolate 独立计数，不是全局精确限额。生产应换 Rate Limiting binding / Durable Object。
 - 结果缓存：同问题（归一化）+ 同 release + 同 userRisk，10 分钟。先查 isolate 内存，再查 Cache API。只缓存真正调用了 LLM 且非转人工的结果；带 history 或 x-fault 的请求不走缓存。发布新 release 后 key 自然失效。
+
+## 预计算向量（export-embeddings）
+
+`/api/admin/seed?reset=1` 会清空向量，重新向量化 181 块要消耗 Workers AI 当日额度（免费计划每日 10,000 neurons）。额度用完时，reset 后线上只能走关键词检索。为此把向量导出成文件随代码发布：
+
+```bash
+npx tsx scripts/export-embeddings.ts          # 从远程 D1 只读查询 chunks.embedding（不调用 AI），写 db/embeddings.v1.json
+npx tsx scripts/export-embeddings.ts --local  # 本地 D1
+npm run build:kb                              # 把它复制成 functions/_generated/embeddings.json（随 Functions 打包）
+```
+
+seed 时对每个待向量化的块，先查预计算表：块 id 相同，且内容指纹（heading+text 的 FNV-1a）一致，就直接写库，不调用 AI；只有缺失或内容已改的块才调用 bge-m3。响应里的 `fromPrecomputed` / `fromAi` 分别是两种来源的块数。没有绑定 AI 时，也能用预计算向量完成 seed。
+
+存储格式取舍：每个分量用 float16 存，整条向量按 base64 编码（1024 维约 2.7 KB/块，181 块约 500 KB），体积约为 JSON 浮点的 1/3。bge-m3 的输出已做 L2 归一化，float16 的有效精度约为 3 位十进制，余弦相似度误差在 1e-3 量级（见 `tests/embeddings.test.ts`），对 top-k 排序没有实际影响。写入 D1 时仍解码为 JSON 浮点，不改变 `chunks.embedding` 的格式。
